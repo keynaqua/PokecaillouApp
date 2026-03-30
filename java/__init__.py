@@ -1,0 +1,1 @@
+from .runtime import ensure_java_installed
