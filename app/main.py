@@ -84,21 +84,20 @@ def main():
 
     try:
         run()
-        code = 0
+        input("\nAppuyez sur Entrée pour quitter...")
+        return 0
 
     except InstallerError as e:
         error("Installation échouée")
         print(f"→ {e}")
-        code = 1
+        input("\nAppuyez sur Entrée pour quitter...")
+        return 1
 
     except Exception as e:
         error("Erreur inattendue")
         print(f"→ {e}")
-        code = 1
-    
-    finally:
         input("\nAppuyez sur Entrée pour quitter...")
-        return code
+        return 1
 
 if __name__ == "__main__":
     sys.exit(main())

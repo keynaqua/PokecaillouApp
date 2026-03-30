@@ -3,6 +3,7 @@ import re
 import sys
 import time
 import subprocess
+from logger import info
 from pathlib import Path
 
 from config import VERSION, GITHUB_OWNER, GITHUB_REPO, APP_BASENAME
@@ -125,6 +126,7 @@ def handle_cleanup_args() -> None:
     # On attend que l'ancien process ait relâché le fichier
     wait_until_file_released(old_exe, timeout=20.0)
     delete_file_when_possible(old_exe, timeout=20.0)
+    info(f"Programme mit à jour vers la version {VERSION}")
 
 
 def launch_updated_exe(new_exe: Path, old_exe: Path) -> None:

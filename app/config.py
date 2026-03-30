@@ -5,7 +5,7 @@ from pathlib import Path
 MC_VERSION = "1.21.1"
 JAVA_MAJOR = 21
 
-VERSION = "1.0.1"
+VERSION = "1.0.2"
 
 GITHUB_OWNER = "keynaqua"
 APP_BASENAME = "Pokecaillou"
