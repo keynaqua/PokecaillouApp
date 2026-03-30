@@ -4,7 +4,6 @@ from pathlib import Path
 from mods import update_mods
 from txt_packs import update_txt_packs
 from java import ensure_java_installed
-from logger import step, error
 from fabric import ensure_fabric_installed
 from shaders import ensure_shaders_installed
 from minecraft import create_minecraft_profile
@@ -16,6 +15,11 @@ from utils.updater import handle_cleanup_args, cleanup_other_versions, check_for
 class InstallerError(Exception):
     pass
 
+import logger
+from logger import step, error, progress
+from gui import start_gui, log_queue
+
+logger.log_queue = log_queue
 
 def is_admin() -> bool:
     try:
@@ -47,35 +51,42 @@ def relaunch_as_admin() -> bool:
 
 
 def run():
+    progress(10)
     step("☕ Vérification de Java...")
     ensure_java_installed()
 
+    progress(20)
     step("🧵 Vérification de Fabric...")
     ensure_fabric_installed()
 
+    progress(30)
     step("📁 Préparation de l'installation Minecraft...")
     minecraft_dir = create_minecraft_profile("Pokecaillou")
 
+    progress(60)
     step("🧩 Synchronisation des mods...")
     update_mods(Path(minecraft_dir) / "mods", MANIFEST_MODS_URL)
 
+    progress(80)
     step("🎨 Synchronisation des packs de ressource...")
     update_txt_packs(Path(minecraft_dir) / "resourcepacks", MANIFEST_TXTP_URL)
 
+    progress(90)
     step("🌈 Vérification des shaders...")
     ensure_shaders_installed(Path(minecraft_dir) / "shaderpacks", SHADER_URL)
 
+    progress(100)
     step("🎉 Installation terminée !")
 
     launch_minecraft_launcher()
 
 
 def main():
-    handle_cleanup_args()
-    cleanup_other_versions()
+    # handle_cleanup_args()
+    # cleanup_other_versions()
 
-    if check_for_updates():
-        return 0
+    # if check_for_updates():
+    #     return 0
 
     if not relaunch_as_admin():
         return 0
@@ -83,8 +94,7 @@ def main():
     code = 0
 
     try:
-        run()
-        input("\nAppuyez sur Entrée pour quitter...")
+        start_gui(run)
         return 0
 
     except InstallerError as e:

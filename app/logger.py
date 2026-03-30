@@ -1,56 +1,72 @@
-import shutil
-from colorama import Fore, Style, init
+log_queue = None
 
-init(autoreset=True)
+def progress(value: int):
+    if log_queue:
+        log_queue.put(("progress", value))
+
+def _send(msg: str, tag: str = "default"):
+    if log_queue:
+        log_queue.put(("log", msg, tag))
+    else:
+        print(msg)
 
 
 def info(message: str) -> None:
-    print(f"{Fore.CYAN}  ℹ️  - {message}{Style.RESET_ALL}")
+    _send(f"ℹ️  {message}", "cyan")
 
 
 def success(message: str) -> None:
-    print(f"{Fore.GREEN}  [✅] - {message}{Style.RESET_ALL}")
+    _send(f"✅ {message}", "green")
 
 
 def error(message: str) -> None:
-    print(f"{Fore.RED}❌ - {message} - ❌{Style.RESET_ALL}")
+    _send(f"❌ {message}", "red")
 
 
 def step(message: str) -> None:
-    width = shutil.get_terminal_size().columns
-
-    if width % 2 != 0:
-        width -= 1
-
+    width = 80
     text = f" {message} "
     line = text.center(width, "─")
 
-    print(f"{Fore.MAGENTA}{line}{Style.RESET_ALL}")
+    if log_queue:
+        # log_queue.put(("clear", ""))  # ❌ désactivé pour l’instant
+
+        pass
+
+    _send(line, "magenta")
+
 
 # ----- Fabric ----- #
 def fabric(message: str) -> None:
-    print(f"  [⛩️ ] - {message}")
+    _send(f"[⛩️] {message}", "yellow")
+
 
 # ----- Mods ----- #
 def mods(message: str) -> None:
-    print(f"  [🧬] - {message}")
+    _send(f"[🧬] {message}", "yellow")
+
 
 def uptodate(message: str) -> None:
-    print(f"{Fore.LIGHTCYAN_EX}      • 🎐 {message}{Style.RESET_ALL}")
+    _send(f"  • 🎐 {message}", "cyan")
+
 
 def outdated(message: str) -> None:
-    print(f"{Fore.LIGHTMAGENTA_EX}      • 💤 {message}{Style.RESET_ALL}")
+    _send(f"  • 💤 {message}", "magenta")
+
 
 def missing(message: str) -> None:
-    print(f"{Fore.LIGHTRED_EX}      • 🏮 {message}{Style.RESET_ALL}")
+    _send(f"  • 🏮 {message}", "red")
+
 
 def extra(message: str) -> None:
-    print(f"{Fore.LIGHTYELLOW_EX}      • 🔅 {message}{Style.RESET_ALL}")
+    _send(f"  • 🔅 {message}", "yellow")
+
 
 # ----- Resourcepacks ----- #
 def txtp(message: str) -> None:
-    print(f"  [🗻] - {message}")
+    _send(f"[🗻] {message}", "yellow")
+
 
 # ----- Shaderpacks ----- #
 def shader(message: str) -> None:
-    print(f"  [🌌] - {message}")
+    _send(f"[🌌] {message}", "yellow")
