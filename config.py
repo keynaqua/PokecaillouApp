@@ -5,6 +5,12 @@ from pathlib import Path
 MC_VERSION = "1.21.1"
 JAVA_MAJOR = 21
 
+VERSION = "1.0.0"
+
+GITHUB_OWNER = "keynaqua"
+APP_BASENAME = "Pokecaillou"
+GITHUB_REPO = "PokecaillouApp"
+
 # ----- Paths ----- #
 TEMP_DIR = Path("./tmp")
 
@@ -13,7 +19,6 @@ AUMID = "Microsoft.4297127D64EC6_8wekyb3d8bbwe!Minecraft"
 
 # ----- URLs ----- #
 ADOPTIUM_API_URL = "https://api.adoptium.net/v3/assets/latest"
-UPDATE_MANIFEST_URL = "https://ton-site-ou-github/version.json"
 FABRIC_META_URL = "https://meta.fabricmc.net/v2/versions/loader"
 FABRIC_INSTALLER_META_URL = "https://meta.fabricmc.net/v2/versions/installer"
 MANIFEST_MODS_URL = "https://raw.githubusercontent.com/keynaqua/Pokecaillou/main/mods.json"

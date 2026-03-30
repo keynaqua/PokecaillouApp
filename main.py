@@ -1,7 +1,6 @@
 import sys
 import ctypes
 from pathlib import Path
-
 from mods import update_mods
 from txt_packs import update_txt_packs
 from java import ensure_java_installed
@@ -11,7 +10,7 @@ from shaders import ensure_shaders_installed
 from minecraft import create_minecraft_profile
 from utils.launcher import launch_minecraft_launcher
 from config import MANIFEST_MODS_URL, MANIFEST_TXTP_URL, SHADER_URL
-from self_update import check_and_update, UpdateError
+from utils.updater import handle_cleanup_args, cleanup_other_versions, check_for_updates
 
 
 class InstallerError(Exception):
@@ -24,38 +23,23 @@ def is_admin() -> bool:
     except Exception:
         return False
 
-
 def relaunch_as_admin() -> bool:
     if is_admin():
         return True
 
-    if getattr(sys, "frozen", False):
-        executable = str(Path(sys.executable).resolve())
-        params = " ".join(f'"{arg}"' for arg in sys.argv[1:]).strip()
+    script = str(Path(sys.argv[0]).resolve())
+    params = " ".join(f'"{arg}"' for arg in sys.argv[1:])
 
-        rc = ctypes.windll.shell32.ShellExecuteW(
-            None,
-            "runas",
-            executable,
-            params if params else None,
-            None,
-            1,
-        )
-    else:
-        python_exe = sys.executable
-        script = str(Path(sys.argv[0]).resolve())
-        params = " ".join(f'"{arg}"' for arg in sys.argv[1:])
-        arguments = f'"{script}" {params}'.strip()
+    rc = ctypes.windll.shell32.ShellExecuteW(
+        None,
+        "runas",
+        sys.executable,
+        f'"{script}" {params}'.strip(),
+        None,
+        1,
+    )
 
-        rc = ctypes.windll.shell32.ShellExecuteW(
-            None,
-            "runas",
-            python_exe,
-            arguments,
-            None,
-            1,
-        )
-
+    # > 32 = succès
     if rc <= 32:
         raise RuntimeError("Impossible de demander l'élévation administrateur.")
 
@@ -82,20 +66,16 @@ def run():
     ensure_shaders_installed(Path(minecraft_dir) / "shaderpacks", SHADER_URL)
 
     step("🎉 Installation terminée !")
+
     launch_minecraft_launcher()
 
 
 def main():
-    try:
-        check_and_update()
-    except UpdateError as e:
-        error("Impossible de vérifier les mises à jour")
-        print(f"→ {e}")
-        print("→ L'application continue avec la version actuelle.")
-    except Exception as e:
-        error("Erreur inattendue pendant la mise à jour")
-        print(f"→ {e}")
-        print("→ L'application continue avec la version actuelle.")
+    handle_cleanup_args()
+    cleanup_other_versions()
+
+    if check_for_updates():
+        return 0
 
     if not relaunch_as_admin():
         return 0
@@ -115,12 +95,10 @@ def main():
         error("Erreur inattendue")
         print(f"→ {e}")
         code = 1
-
+    
     finally:
         input("\nAppuyez sur Entrée pour quitter...")
-
-    return code
-
+        return code
 
 if __name__ == "__main__":
     sys.exit(main())
