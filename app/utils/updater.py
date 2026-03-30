@@ -1,13 +1,13 @@
-import os
 import re
 import sys
 import time
 import subprocess
-from logger import info
 from pathlib import Path
 
+from logger import info
 from config import VERSION, GITHUB_OWNER, GITHUB_REPO, APP_BASENAME
 from utils.http import get_json, download_file
+from gui import ask_update_confirmation, show_info_dialog, show_error_dialog
 
 
 def parse_version(version: str) -> tuple[int, ...]:
@@ -73,7 +73,7 @@ def get_latest_release_info() -> dict:
     )
 
 
-def wait_until_file_released(path: Path, timeout: float = 15.0) -> bool:
+def wait_until_file_released(path: Path, timeout: float = 20.0) -> bool:
     deadline = time.time() + timeout
 
     while time.time() < deadline:
@@ -81,7 +81,6 @@ def wait_until_file_released(path: Path, timeout: float = 15.0) -> bool:
             return True
 
         try:
-            # Tente un renommage neutre pour vérifier que le fichier n'est plus lock
             tmp = path.with_suffix(path.suffix + ".tmpcheck")
             path.rename(tmp)
             tmp.rename(path)
@@ -92,7 +91,7 @@ def wait_until_file_released(path: Path, timeout: float = 15.0) -> bool:
     return False
 
 
-def delete_file_when_possible(path: Path, timeout: float = 15.0) -> bool:
+def delete_file_when_possible(path: Path, timeout: float = 20.0) -> bool:
     deadline = time.time() + timeout
 
     while time.time() < deadline:
@@ -108,12 +107,6 @@ def delete_file_when_possible(path: Path, timeout: float = 15.0) -> bool:
 
 
 def handle_cleanup_args() -> None:
-    """
-    À appeler au tout début du programme.
-    Si lancé avec:
-        --cleanup-old "chemin_ancien_exe"
-    alors on attend que l'ancien soit fermé puis on le supprime.
-    """
     if "--cleanup-old" not in sys.argv:
         return
 
@@ -123,18 +116,26 @@ def handle_cleanup_args() -> None:
 
     old_exe = Path(sys.argv[idx + 1])
 
-    # On attend que l'ancien process ait relâché le fichier
     wait_until_file_released(old_exe, timeout=20.0)
-    delete_file_when_possible(old_exe, timeout=20.0)
-    info(f"Programme mit à jour vers la version {VERSION}")
+    deleted = delete_file_when_possible(old_exe, timeout=20.0)
+
+    if deleted:
+        info(f"Programme mis à jour vers la version {VERSION}")
+    else:
+        info("Mise à jour effectuée, mais l'ancienne version n'a pas pu être supprimée immédiatement.")
 
 
 def launch_updated_exe(new_exe: Path, old_exe: Path) -> None:
+    creationflags = 0
+    if sys.platform == "win32":
+        creationflags = subprocess.CREATE_NO_WINDOW
+
     subprocess.Popen(
         [str(new_exe), "--cleanup-old", str(old_exe)],
         cwd=str(new_exe.parent),
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
+        creationflags=creationflags,
     )
 
 
@@ -143,27 +144,52 @@ def check_for_updates() -> bool:
     Retourne True si une mise à jour a été lancée
     et que l'app actuelle doit se fermer.
     """
-    release = get_latest_release_info()
+    try:
+        release = get_latest_release_info()
+    except Exception as e:
+        # en cas d'erreur update, on n'empêche pas l'install de continuer
+        info(f"Impossible de vérifier les mises à jour : {e}")
+        return False
+
     remote_version = release["version"]
 
     if not is_newer_version(VERSION, remote_version):
         return False
 
+    accepted = ask_update_confirmation(
+        title="Mise à jour disponible",
+        message=(
+            f"Une nouvelle version est disponible.\n\n"
+            f"Version actuelle : {VERSION}\n"
+            f"Nouvelle version : {remote_version}\n\n"
+            f"Clique sur OK pour télécharger et lancer la mise à jour."
+        ),
+    )
+
+    if not accepted:
+        return False
+
     destination = app_dir() / release["asset_name"]
 
-    # Évite de re-télécharger si déjà présent
-    if not destination.exists():
-        download_file(release["download_url"], destination)
+    try:
+        if not destination.exists():
+            info(f"Téléchargement de la version {remote_version}...")
+            download_file(release["download_url"], destination)
 
-    old_exe = current_exe_path()
-    launch_updated_exe(destination, old_exe)
-    return True
+        old_exe = current_exe_path()
+        launch_updated_exe(destination, old_exe)
+        show_info_dialog(
+            "Mise à jour",
+            "La nouvelle version va être lancée."
+        )
+        return True
+
+    except Exception as e:
+        show_error_dialog("Erreur de mise à jour", str(e))
+        return False
 
 
 def cleanup_other_versions() -> None:
-    """
-    Supprime les autres exes versionnés sauf celui en cours.
-    """
     current = current_exe_path()
     pattern = re.compile(
         rf"^{re.escape(APP_BASENAME)}-\d+\.\d+\.\d+\.exe$",
