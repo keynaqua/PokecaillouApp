@@ -1,10 +1,12 @@
 import json
 from datetime import datetime, timezone
 from utils.system import build_java_args
-from config import (get_minecraft_dir, ICON)
+from config import get_minecraft_dir, ICON
+
 
 def now_iso():
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
 
 def create_launcher_profile(name, game_dir, version_id):
     launcher_file = get_minecraft_dir() / "launcher_profiles.json"
@@ -16,6 +18,12 @@ def create_launcher_profile(name, game_dir, version_id):
 
     profiles = data.setdefault("profiles", {})
 
+    existing = profiles.get(name)
+    if existing is not None:
+        # On conserve le profil existant pour éviter de modifier la RAM
+        # et de réécrire inutilement launcher_profiles.json.
+        return
+
     profile = {
         "name": name,
         "type": "custom",
@@ -24,7 +32,7 @@ def create_launcher_profile(name, game_dir, version_id):
         "lastVersionId": version_id,
         "gameDir": str(game_dir),
         "icon": ICON,
-        "javaArgs": build_java_args()
+        "javaArgs": build_java_args(),
     }
 
     profiles[name] = profile

@@ -1,57 +1,39 @@
-import os
-import sys
-import subprocess
-
+import ctypes
 
 def get_total_ram_gb():
-    if sys.platform.startswith("linux"):
-        with open("/proc/meminfo", "r", encoding="utf-8") as file:
-            for line in file:
-                if line.startswith("MemTotal:"):
-                    kb = int(line.split()[1])
-                    return kb // (1024 * 1024)
+    class MEMORYSTATUSEX(ctypes.Structure):
+        _fields_ = [
+            ("dwLength", ctypes.c_ulong),
+            ("dwMemoryLoad", ctypes.c_ulong),
+            ("ullTotalPhys", ctypes.c_ulonglong),
+            ("ullAvailPhys", ctypes.c_ulonglong),
+            ("ullTotalPageFile", ctypes.c_ulonglong),
+            ("ullAvailPageFile", ctypes.c_ulonglong),
+            ("ullTotalVirtual", ctypes.c_ulonglong),
+            ("ullAvailVirtual", ctypes.c_ulonglong),
+            ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+        ]
 
-    elif sys.platform == "darwin":
-        output = subprocess.check_output(
-            ["sysctl", "-n", "hw.memsize"],
-            text=True
-        ).strip()
-        return int(output) // (1024 ** 3)
+    memory_status = MEMORYSTATUSEX()
+    memory_status.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
 
-    elif os.name == "nt":
-        import ctypes
+    ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(memory_status))
 
-        class MEMORYSTATUSEX(ctypes.Structure):
-            _fields_ = [
-                ("dwLength", ctypes.c_ulong),
-                ("dwMemoryLoad", ctypes.c_ulong),
-                ("ullTotalPhys", ctypes.c_ulonglong),
-                ("ullAvailPhys", ctypes.c_ulonglong),
-                ("ullTotalPageFile", ctypes.c_ulonglong),
-                ("ullAvailPageFile", ctypes.c_ulonglong),
-                ("ullTotalVirtual", ctypes.c_ulonglong),
-                ("ullAvailVirtual", ctypes.c_ulonglong),
-                ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
-            ]
-
-        memory_status = MEMORYSTATUSEX()
-        memory_status.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
-        ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(memory_status))
-        return memory_status.ullTotalPhys // (1024 ** 3)
-
-    raise RuntimeError("Impossible de détecter la RAM totale du PC.")
+    # 🔥 IMPORTANT : division FLOAT + round
+    return round(memory_status.ullTotalPhys / (1024 ** 3))
 
 
 def get_recommended_ram_gb():
-    total_ram_gb = get_total_ram_gb()
-    recommended_ram_gb = total_ram_gb // 2
+    total = get_total_ram_gb()
 
-    if recommended_ram_gb < 2:
-        return 2
-    if recommended_ram_gb > 17:
+    ram = int(total * 0.6)  # 60%
+
+    if ram < 4:
+        return 4
+    if ram > 16:
         return 16
 
-    return recommended_ram_gb
+    return ram
 
 
 def build_java_args():

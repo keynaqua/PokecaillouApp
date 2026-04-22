@@ -16,19 +16,69 @@ class FabricMetaError(ModDetectError):
     pass
 
 
+def _escape_newlines_inside_strings(text: str) -> str:
+    """
+    Remplace les retours à la ligne bruts trouvés *à l'intérieur* des chaînes JSON
+    par \\n, pour tolérer certains fabric.mod.json mal formés.
+    """
+    result: list[str] = []
+    in_string = False
+    escaped = False
+
+    for char in text:
+        if escaped:
+            result.append(char)
+            escaped = False
+            continue
+
+        if char == "\\":
+            result.append(char)
+            escaped = True
+            continue
+
+        if char == '"':
+            result.append(char)
+            in_string = not in_string
+            continue
+
+        if in_string and char in ("\n", "\r"):
+            # On normalise les vrais retours à la ligne présents dans une string JSON
+            result.append("\\n")
+            continue
+
+        result.append(char)
+
+    return "".join(result)
+
+
+def _load_json_tolerant(raw_text: str, jar_name: str) -> dict[str, Any] | list[Any]:
+    """
+    Essaie d'abord le parseur JSON standard.
+    Si ça échoue, tente une réparation des sauts de ligne bruts dans les strings.
+    """
+    try:
+        return json.loads(raw_text)
+    except json.JSONDecodeError:
+        repaired = _escape_newlines_inside_strings(raw_text)
+        try:
+            return json.loads(repaired)
+        except json.JSONDecodeError as exc:
+            raise FabricMetaError(f"{jar_name}: invalid fabric.mod.json") from exc
+
+
 def _read_fabric_meta(jar_path: Path) -> dict[str, Any]:
     try:
         with zipfile.ZipFile(jar_path) as jar:
             with jar.open("fabric.mod.json") as file:
-                data = json.loads(file.read().decode("utf-8"))
+                raw_text = file.read().decode("utf-8")
     except KeyError as exc:
         raise FabricMetaError(f"{jar_path.name}: missing fabric.mod.json") from exc
     except zipfile.BadZipFile as exc:
         raise FabricMetaError(f"{jar_path.name}: invalid JAR") from exc
     except UnicodeDecodeError as exc:
         raise FabricMetaError(f"{jar_path.name}: unreadable fabric.mod.json") from exc
-    except json.JSONDecodeError as exc:
-        raise FabricMetaError(f"{jar_path.name}: invalid fabric.mod.json") from exc
+
+    data = _load_json_tolerant(raw_text, jar_path.name)
 
     if isinstance(data, list):
         data = next((item for item in data if isinstance(item, dict) and item.get("id")), None)
@@ -72,7 +122,7 @@ def detect_mods(mods_dir: str | Path) -> DetectionReport:
             )
         except FabricMetaError as exc:
             report.broken_files.append((jar_path, str(exc)))
-        except Exception as exc:  # pragma: no cover
+        except Exception as exc:
             report.broken_files.append((jar_path, f"{jar_path.name}: unexpected error: {exc}"))
 
     return report

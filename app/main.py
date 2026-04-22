@@ -5,6 +5,7 @@ from pathlib import Path
 from mods import update_mods
 from txt_packs import update_txt_packs
 from java import ensure_java_installed
+from config_sync import sync_config_branch
 from fabric import ensure_fabric_installed
 from shaders import ensure_shaders_installed
 from minecraft import create_minecraft_profile
@@ -77,17 +78,21 @@ def run():
     step("📁 Préparation de l'installation Minecraft...")
     minecraft_dir = create_minecraft_profile("Pokecaillou")
 
-    progress(60)
+    progress(50)
     step("🧩 Synchronisation des mods...")
     update_mods(Path(minecraft_dir) / "mods", MANIFEST_MODS_URL)
 
-    progress(80)
+    progress(70)
     step("🎨 Synchronisation des packs de ressource...")
     update_txt_packs(Path(minecraft_dir) / "resourcepacks", MANIFEST_TXTP_URL)
 
-    progress(90)
+    progress(80)
     step("🌈 Vérification des shaders...")
     ensure_shaders_installed(Path(minecraft_dir) / "shaderpacks", SHADER_URL)
+
+    progress(90)
+    step("⛲️ Synchronisation des configs nécessaires... (BETA)")
+    sync_config_branch("keynaqua", "Pokecaillou", "configs")
 
     progress(100)
     step("🎉 Installation terminée !")
@@ -113,7 +118,7 @@ def main():
             return 0
 
         start_gui(run)
-        return 0
+        return 1
 
     except InstallerError as e:
         show_error_dialog("Installation échouée", str(e))

@@ -10,6 +10,7 @@ from .compare import compare_mods
 from .install import apply_actions
 from logger import mods, uptodate, outdated, missing, extra, success
 
+from .local_sync_sha import sync_remote_repo_mods
 
 class ManifestError(RuntimeError):
     pass
@@ -29,19 +30,21 @@ def _parse_mod(entry: dict, index: int) -> DesiredMod:
     url = entry.get("download_url")
     file_name = entry.get("file_name")
 
-    if not isinstance(mod_id, str) or not mod_id:
+    if not isinstance(mod_id, str) or not mod_id.strip():
         raise ManifestError(f"Mod #{index} has an invalid 'id'")
-    if not isinstance(version, str) or not version:
+    if not isinstance(version, str) or not version.strip():
         raise ManifestError(f"Mod '{mod_id}' has an invalid 'version'")
-    if not isinstance(url, str) or not url:
+    if not isinstance(url, str) or not url.strip():
         raise ManifestError(f"Mod '{mod_id}' has an invalid 'download_url'")
-    if file_name is not None and (not isinstance(file_name, str) or not file_name):
-        raise ManifestError(f"Mod '{mod_id}' has an invalid 'file_name'")
+    if file_name is not None:
+        if not isinstance(file_name, str) or not file_name.strip():
+            raise ManifestError(f"Mod '{mod_id}' has an invalid 'file_name'")
+        file_name = file_name.strip()
 
     return DesiredMod(
-        mod_id=mod_id,
-        version=version,
-        download_url=url,
+        mod_id=mod_id.strip(),
+        version=version.strip(),
+        download_url=url.strip(),
         file_name=file_name,
     )
 
@@ -90,6 +93,9 @@ def update_mods(mods_dir: str | Path, manifest_url: str, apply: bool = True):
 
     mods(f"Scan mods: {mods_path}")
     detected = detect_mods(mods_path)
+    # mods("Detected installed mods:")
+    # for mod in detected.mods:
+    #     print(f"  - id={mod.mod_id!r}, version={mod.version!r}, file={mod.file_path.name}")
 
     if detected.broken_files:
         mods("Ignored invalid files:")
@@ -97,6 +103,9 @@ def update_mods(mods_dir: str | Path, manifest_url: str, apply: bool = True):
             print(f"  - {file_path.name}: {reason}")
 
     mods("Compare with manifest...")
+    # mods("Desired mods from manifest:")
+    # for mod in desired_mods:
+    #     print(f"  - id={mod.mod_id!r}, version={mod.version!r}")
     result = compare_mods(detected, desired_mods, mods_path)
     _print_report(result)
 
@@ -106,5 +115,13 @@ def update_mods(mods_dir: str | Path, manifest_url: str, apply: bool = True):
 
     mods("Apply changes...")
     apply_actions(result)
+
+    sync_remote_repo_mods(
+        instance_mods_dir=mods_path,
+        owner="keynaqua",
+        repo="Pokecaillou",
+        branch="mods",
+    )
+
     success("Mods synchronisés avec succes !")
     return result
