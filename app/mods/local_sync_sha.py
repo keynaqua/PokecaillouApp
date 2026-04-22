@@ -2,9 +2,15 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
+from urllib.request import urlopen
 
-from utils.http import get_json, download_file  # ✅ IMPORTANT
+from utils.http import get_json, download_file
 
+from config import GITHUB_API_URL
+
+# =========================
+# MODELS
+# =========================
 
 class RemoteMod:
     def __init__(self, name: str, download_url: str, sha1: str):
@@ -31,13 +37,7 @@ def _sha1_file(path: Path) -> str:
 def _sha1_url(url: str) -> str:
     h = hashlib.sha1()
 
-    # ⚠️ on stream le download via download_file temporaire ? NON
-    # ici on stream direct via urllib interne de get_json / download_file
-    # MAIS comme on n'a pas accès au stream interne, on fallback simple :
-
-    import urllib.request
-
-    with urllib.request.urlopen(url) as response:
+    with urlopen(url) as response:
         while True:
             chunk = response.read(8192)
             if not chunk:
@@ -48,16 +48,16 @@ def _sha1_url(url: str) -> str:
 
 
 # =========================
-# GitHub
+# GITHUB
 # =========================
 
-def _list_github_mods(owner: str, repo: str, path: str, branch: str) -> list[RemoteMod]:
-    api_url = f"https://api.github.com/repos/{owner}/{repo}/contents/{path}?ref={branch}"
+def _fetch_remote_mods() -> list[RemoteMod]:
+    print("[LOCAL SHA] Fetch repo mods...")
 
-    data = get_json(api_url)  # ✅ robuste
+    data = get_json(GITHUB_API_URL)
 
     if not isinstance(data, list):
-        raise RuntimeError(f"Réponse GitHub invalide pour {api_url}")
+        raise RuntimeError("Réponse GitHub invalide")
 
     mods: list[RemoteMod] = []
 
@@ -85,24 +85,17 @@ def _list_github_mods(owner: str, repo: str, path: str, branch: str) -> list[Rem
 
 
 # =========================
-# Sync
+# SYNC
 # =========================
 
-def sync_remote_repo_mods(
-    instance_mods_dir: str | Path,
-    owner: str,
-    repo: str,
-    repo_mods_path: str = "mods",
-    branch: str = "mods",  # ✅ PAR DÉFAUT ta branche
-):
+def sync_remote_repo_mods(instance_mods_dir: str | Path):
     instance_path = Path(instance_mods_dir)
     instance_path.mkdir(parents=True, exist_ok=True)
 
-    print("[LOCAL SHA] Fetch repo mods...")
-    remote_mods = _list_github_mods(owner, repo, repo_mods_path, branch)
+    remote_mods = _fetch_remote_mods()
 
     # =========================
-    # Hash local
+    # HASH LOCAL
     # =========================
 
     local_hashes: dict[str, tuple[Path, str]] = {}
@@ -113,17 +106,16 @@ def sync_remote_repo_mods(
             local_hashes[file.name] = (file, sha)
         except Exception:
             print(f"[LOCAL SHA] Ignored local file: {file.name}")
-            continue
 
     # =========================
-    # Compare
+    # COMPARE
     # =========================
 
     for mod in remote_mods:
         local = local_hashes.get(mod.name)
         target_file = instance_path / mod.name
 
-        # 🆕 INSTALL
+        # INSTALL
         if not local:
             print(f"[LOCAL SHA] Install {mod.name}")
             download_file(mod.download_url, target_file)
@@ -131,7 +123,7 @@ def sync_remote_repo_mods(
 
         local_file, local_sha = local
 
-        # 🔁 UPDATE
+        # UPDATE
         if local_sha != mod.sha1:
             print(f"[LOCAL SHA] Update {mod.name}")
             try:
@@ -142,5 +134,5 @@ def sync_remote_repo_mods(
             download_file(mod.download_url, target_file)
             continue
 
-        # ✅ OK
+        # OK
         print(f"[LOCAL SHA] OK {mod.name}")

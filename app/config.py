@@ -23,6 +23,7 @@ FABRIC_META_URL = "https://meta.fabricmc.net/v2/versions/loader"
 FABRIC_INSTALLER_META_URL = "https://meta.fabricmc.net/v2/versions/installer"
 MANIFEST_MODS_URL = "https://raw.githubusercontent.com/keynaqua/Pokecaillou/main/mods.json"
 MANIFEST_TXTP_URL = "https://raw.githubusercontent.com/keynaqua/Pokecaillou/main/ressourcepacks.json"
+GITHUB_API_URL = "https://api.github.com/repos/keynaqua/Pokecaillou/contents?ref=mods"
 SHADER_URL = "https://cdn.modrinth.com/data/R6NEzAwj/versions/d8rcvDTp/ComplementaryUnbound_r5.7.1.zip"
 
 

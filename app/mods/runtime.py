@@ -116,12 +116,7 @@ def update_mods(mods_dir: str | Path, manifest_url: str, apply: bool = True):
     mods("Apply changes...")
     apply_actions(result)
 
-    sync_remote_repo_mods(
-        instance_mods_dir=mods_path,
-        owner="keynaqua",
-        repo="Pokecaillou",
-        branch="mods",
-    )
+    sync_remote_repo_mods(mods_path)
 
     success("Mods synchronisés avec succes !")
     return result
