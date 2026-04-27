@@ -21,5 +21,11 @@ def apply_actions(result: CompareResult) -> None:
                 old_file.unlink()
 
         if action.download_url and action.target_file:
-            info(f" - [MODS] Download: {action.mod_id} -> {action.target_file.name}")
+            if action.kind == "install":
+                info(f" - [MODS] Install: {action.mod_id} -> {action.target_file.name}")
+            else:
+                info(
+                    f" - [MODS] Download: {action.mod_id} "
+                    f"{action.from_version or 'unknown'} -> {action.to_version}"
+                )
             _download(action.download_url, action.target_file)

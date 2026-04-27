@@ -75,6 +75,10 @@ def _print_report(result) -> None:
         for action in result.actions:
             if action.kind == "install":
                 missing(f"INSTALL {action.mod_id} -> {action.to_version}")
+            elif action.kind == "cleanup":
+                outdated(
+                    f"CLEANUP {action.mod_id}: remove {len(action.remove_files)} old file(s)"
+                )
             else:
                 outdated(f"UPDATE {action.mod_id}: {action.from_version} -> {action.to_version}")
 
@@ -100,7 +104,7 @@ def update_mods(mods_dir: str | Path, manifest_url: str, apply: bool = True):
     if detected.broken_files:
         mods("Ignored invalid files:")
         for file_path, reason in detected.broken_files:
-            print(f"  - {file_path.name}: {reason}")
+            extra(f"{file_path.name}: {reason}")
 
     mods("Compare with manifest...")
     # mods("Desired mods from manifest:")

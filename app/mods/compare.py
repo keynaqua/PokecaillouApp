@@ -1,13 +1,10 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Iterable
 
 from .models import CompareResult, DesiredMod, DetectionReport, InstalledMod, ModAction
-
-
-class DuplicateModError(RuntimeError):
-    pass
 
 
 def _index_mods(mods: list[InstalledMod]) -> dict[str, list[InstalledMod]]:
@@ -15,6 +12,22 @@ def _index_mods(mods: list[InstalledMod]) -> dict[str, list[InstalledMod]]:
     for mod in mods:
         index.setdefault(mod.mod_id, []).append(mod)
     return index
+
+
+def _version_key(version: str) -> tuple:
+    parts: list[tuple[int, int | str]] = []
+
+    for token in re.findall(r"\d+|[A-Za-z]+", version):
+        if token.isdigit():
+            parts.append((0, int(token)))
+        else:
+            parts.append((1, token.lower()))
+
+    return tuple(parts)
+
+
+def _sort_matches(matches: list[InstalledMod]) -> list[InstalledMod]:
+    return sorted(matches, key=lambda mod: (_version_key(mod.version), mod.file_path.name))
 
 
 def compare_mods(
@@ -28,7 +41,7 @@ def compare_mods(
     used_files: set[Path] = set()
 
     for desired in desired_mods:
-        matches = installed.get(desired.mod_id, [])
+        matches = _sort_matches(installed.get(desired.mod_id, []))
 
         if not matches:
             result.actions.append(
@@ -43,16 +56,32 @@ def compare_mods(
             )
             continue
 
-        if len(matches) > 1:
-            names = ", ".join(sorted(mod.file_path.name for mod in matches))
-            raise DuplicateModError(f"Multiple JARs found for '{desired.mod_id}': {names}")
+        matching_version = [mod for mod in matches if mod.version == desired.version]
+        duplicates_to_remove: list[Path] = []
 
-        current = matches[0]
-        used_files.add(current.file_path)
-
-        if current.version == desired.version:
+        if matching_version:
+            current = matching_version[-1]
+            duplicates_to_remove = [
+                mod.file_path for mod in matches if mod.file_path != current.file_path
+            ]
+            used_files.add(current.file_path)
             result.up_to_date.append(current)
+
+            if duplicates_to_remove:
+                result.actions.append(
+                    ModAction(
+                        kind="cleanup",
+                        mod_id=desired.mod_id,
+                        from_version=current.version,
+                        to_version=desired.version,
+                        remove_files=duplicates_to_remove,
+                    )
+                )
+
             continue
+
+        current = matches[-1]
+        remove_files = [mod.file_path for mod in matches]
 
         result.actions.append(
             ModAction(
@@ -62,12 +91,18 @@ def compare_mods(
                 to_version=desired.version,
                 download_url=desired.download_url,
                 target_file=mods_path / (desired.file_name or f"{desired.mod_id}-{desired.version}.jar"),
-                remove_files=[current.file_path],
+                remove_files=remove_files,
             )
         )
 
+    planned_removals = {
+        file_path
+        for action in result.actions
+        for file_path in action.remove_files
+    }
+
     for mod in detected.mods:
-        if mod.file_path not in used_files:
+        if mod.file_path not in used_files and mod.file_path not in planned_removals:
             result.extra_mods.append(mod)
 
     return result

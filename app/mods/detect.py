@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import zipfile
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 
@@ -17,10 +18,6 @@ class FabricMetaError(ModDetectError):
 
 
 def _escape_newlines_inside_strings(text: str) -> str:
-    """
-    Remplace les retours à la ligne bruts trouvés *à l'intérieur* des chaînes JSON
-    par \\n, pour tolérer certains fabric.mod.json mal formés.
-    """
     result: list[str] = []
     in_string = False
     escaped = False
@@ -42,7 +39,6 @@ def _escape_newlines_inside_strings(text: str) -> str:
             continue
 
         if in_string and char in ("\n", "\r"):
-            # On normalise les vrais retours à la ligne présents dans une string JSON
             result.append("\\n")
             continue
 
@@ -52,10 +48,6 @@ def _escape_newlines_inside_strings(text: str) -> str:
 
 
 def _load_json_tolerant(raw_text: str, jar_name: str) -> dict[str, Any] | list[Any]:
-    """
-    Essaie d'abord le parseur JSON standard.
-    Si ça échoue, tente une réparation des sauts de ligne bruts dans les strings.
-    """
     try:
         return json.loads(raw_text)
     except json.JSONDecodeError:
@@ -64,6 +56,18 @@ def _load_json_tolerant(raw_text: str, jar_name: str) -> dict[str, Any] | list[A
             return json.loads(repaired)
         except json.JSONDecodeError as exc:
             raise FabricMetaError(f"{jar_name}: invalid fabric.mod.json") from exc
+
+
+def _normalize_fabric_meta(data: dict[str, Any] | list[Any], source_name: str) -> dict[str, Any]:
+    if isinstance(data, list):
+        data = next((item for item in data if isinstance(item, dict) and item.get("id")), None)
+        if data is None:
+            raise FabricMetaError(f"{source_name}: unusable fabric.mod.json list")
+
+    if not isinstance(data, dict):
+        raise FabricMetaError(f"{source_name}: fabric.mod.json must be an object")
+
+    return data
 
 
 def _read_fabric_meta(jar_path: Path) -> dict[str, Any]:
@@ -79,16 +83,44 @@ def _read_fabric_meta(jar_path: Path) -> dict[str, Any]:
         raise FabricMetaError(f"{jar_path.name}: unreadable fabric.mod.json") from exc
 
     data = _load_json_tolerant(raw_text, jar_path.name)
+    return _normalize_fabric_meta(data, jar_path.name)
 
-    if isinstance(data, list):
-        data = next((item for item in data if isinstance(item, dict) and item.get("id")), None)
-        if data is None:
-            raise FabricMetaError(f"{jar_path.name}: unusable fabric.mod.json list")
 
-    if not isinstance(data, dict):
-        raise FabricMetaError(f"{jar_path.name}: fabric.mod.json must be an object")
+def parse_installed_mod_from_meta(meta: dict[str, Any], file_path: Path) -> InstalledMod:
+    mod_id = meta.get("id")
+    version = meta.get("version")
+    name = meta.get("name")
 
-    return data
+    if not isinstance(mod_id, str) or not mod_id.strip():
+        raise FabricMetaError(f"{file_path.name}: missing id")
+    if not isinstance(version, str) or not version.strip():
+        raise FabricMetaError(f"{file_path.name}: missing version")
+
+    return InstalledMod(
+        mod_id=mod_id.strip(),
+        version=version.strip(),
+        name=name.strip() if isinstance(name, str) and name.strip() else None,
+        file_path=file_path,
+    )
+
+
+def parse_installed_mod_bytes(jar_bytes: bytes, file_name: str) -> InstalledMod:
+    file_path = Path(file_name)
+
+    try:
+        with zipfile.ZipFile(BytesIO(jar_bytes)) as jar:
+            with jar.open("fabric.mod.json") as file:
+                raw_text = file.read().decode("utf-8")
+    except KeyError as exc:
+        raise FabricMetaError(f"{file_name}: missing fabric.mod.json") from exc
+    except zipfile.BadZipFile as exc:
+        raise FabricMetaError(f"{file_name}: invalid JAR") from exc
+    except UnicodeDecodeError as exc:
+        raise FabricMetaError(f"{file_name}: unreadable fabric.mod.json") from exc
+
+    data = _load_json_tolerant(raw_text, file_name)
+    meta = _normalize_fabric_meta(data, file_name)
+    return parse_installed_mod_from_meta(meta, file_path)
 
 
 def detect_mods(mods_dir: str | Path) -> DetectionReport:
@@ -103,23 +135,7 @@ def detect_mods(mods_dir: str | Path) -> DetectionReport:
     for jar_path in sorted(mods_path.glob("*.jar")):
         try:
             meta = _read_fabric_meta(jar_path)
-            mod_id = meta.get("id")
-            version = meta.get("version")
-            name = meta.get("name")
-
-            if not isinstance(mod_id, str) or not mod_id.strip():
-                raise FabricMetaError(f"{jar_path.name}: missing id")
-            if not isinstance(version, str) or not version.strip():
-                raise FabricMetaError(f"{jar_path.name}: missing version")
-
-            report.mods.append(
-                InstalledMod(
-                    mod_id=mod_id.strip(),
-                    version=version.strip(),
-                    name=name.strip() if isinstance(name, str) and name.strip() else None,
-                    file_path=jar_path,
-                )
-            )
+            report.mods.append(parse_installed_mod_from_meta(meta, jar_path))
         except FabricMetaError as exc:
             report.broken_files.append((jar_path, str(exc)))
         except Exception as exc:
