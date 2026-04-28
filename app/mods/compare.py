@@ -30,11 +30,7 @@ def _sort_matches(matches: list[InstalledMod]) -> list[InstalledMod]:
     return sorted(matches, key=lambda mod: (_version_key(mod.version), mod.file_path.name))
 
 
-def compare_mods(
-    detected: DetectionReport,
-    desired_mods: Iterable[DesiredMod],
-    mods_dir: str | Path,
-) -> CompareResult:
+def compare_mods(detected: DetectionReport, desired_mods: Iterable[DesiredMod], mods_dir: str | Path) -> CompareResult:
     mods_path = Path(mods_dir)
     installed = _index_mods(detected.mods)
     result = CompareResult()

@@ -4,16 +4,58 @@ import json
 from pathlib import Path
 from urllib.request import urlopen
 
-from .models import DesiredMod
+from .models import DesiredMod, DetectionReport
 from .detect import detect_mods
 from .compare import compare_mods
 from .install import apply_actions
-from logger import mods, uptodate, outdated, missing, extra, success
+from logger import mods, uptodate, outdated, missing, extra, success, info
 
 from .local_sync_sha import sync_remote_repo_mods
 
+from config import BLACKLISTED_MODS_URL
+
 class ManifestError(RuntimeError):
     pass
+
+def remove_blacklisted_mods(mods_dir: Path):
+    detected = detect_mods(mods_dir)
+    data = _load_json(BLACKLISTED_MODS_URL)
+    raw_mods = data.get("mods")
+
+    if not isinstance(raw_mods, list):
+        raise RuntimeError(f'Blacklist must contain a "mods" list')
+    
+    blacklist = set()
+    removed = []
+
+    for index, entry in enumerate(raw_mods, start=1):
+        if not isinstance(entry, dict):
+            raise RuntimeError(f"Blacklisted mod #{index} must be a JSON object")
+        
+        mod_id = entry.get("id")
+
+        if not isinstance(mod_id, str) or not mod_id.strip(): # strip = trim sur whitespaces
+            raise RuntimeError(f"Blacklisted mod #{index} has an invalid 'id'")
+
+        blacklist.add(mod_id.strip())
+
+    for entry in detected.mods:
+        if entry.mod_id not in blacklist:
+            continue
+        
+        mods(f"Blacklisted mod installed: {entry.name or entry.mod_id}")
+
+        if entry.file_path.exists():
+            info(f" - [MODS] Remove blacklisted: {entry.file_path.name}")
+            entry.file_path.unlink()
+            removed.append(entry)
+
+    if removed:
+        success(f"Blacklist appliquée: {len(removed)} mod(s) supprimé(s)")
+    else:
+        mods("Aucun mod blacklisté détecté.")
+
+    return removed
 
 
 def _load_json(url: str) -> dict:
@@ -87,7 +129,6 @@ def _print_report(result) -> None:
         for mod in result.extra_mods:
             extra(f"{mod.mod_id} ({mod.version}) [{mod.file_path.name}]")
 
-
 def update_mods(mods_dir: str | Path, manifest_url: str, apply: bool = True):
     mods_path = Path(mods_dir)
     mods_path.mkdir(parents=True, exist_ok=True)
@@ -97,19 +138,13 @@ def update_mods(mods_dir: str | Path, manifest_url: str, apply: bool = True):
 
     mods(f"Scan mods: {mods_path}")
     detected = detect_mods(mods_path)
-    # mods("Detected installed mods:")
-    # for mod in detected.mods:
-    #     print(f"  - id={mod.mod_id!r}, version={mod.version!r}, file={mod.file_path.name}")
-
+    
     if detected.broken_files:
         mods("Ignored invalid files:")
         for file_path, reason in detected.broken_files:
             extra(f"{file_path.name}: {reason}")
 
     mods("Compare with manifest...")
-    # mods("Desired mods from manifest:")
-    # for mod in desired_mods:
-    #     print(f"  - id={mod.mod_id!r}, version={mod.version!r}")
     result = compare_mods(detected, desired_mods, mods_path)
     _print_report(result)
 
@@ -121,6 +156,8 @@ def update_mods(mods_dir: str | Path, manifest_url: str, apply: bool = True):
     apply_actions(result)
 
     sync_remote_repo_mods(mods_path)
+
+    remove_blacklisted_mods(mods_path)
 
     success("Mods synchronisés avec succes !")
     return result
