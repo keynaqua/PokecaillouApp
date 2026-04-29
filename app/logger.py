@@ -47,7 +47,7 @@ def mods(message: str) -> None:
 
 
 def uptodate(message: str) -> None:
-    _send(f"  • 🎐 {message}", "cyan")
+    _send(f"  • 🎐 {message}", "green")
 
 
 def outdated(message: str) -> None:
@@ -59,7 +59,7 @@ def missing(message: str) -> None:
 
 
 def extra(message: str) -> None:
-    _send(f"  • 🔅 {message}", "yellow")
+    _send(f"  • 🔅 {message}", "cyan")
 
 
 # ----- Resourcepacks ----- #

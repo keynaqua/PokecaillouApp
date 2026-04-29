@@ -8,7 +8,7 @@ from .models import DesiredMod, DetectionReport
 from .detect import detect_mods
 from .compare import compare_mods
 from .install import apply_actions
-from logger import mods, uptodate, outdated, missing, extra, success, info
+from logger import mods, uptodate, outdated, missing, extra, success, info, error
 
 from .local_sync_sha import sync_remote_repo_mods
 
@@ -133,18 +133,18 @@ def update_mods(mods_dir: str | Path, manifest_url: str, apply: bool = True):
     mods_path = Path(mods_dir)
     mods_path.mkdir(parents=True, exist_ok=True)
 
-    mods(f"Load manifest: {manifest_url}")
+    mods(f"Loading manifest...")
     desired_mods = _load_manifest(manifest_url)
 
-    mods(f"Scan mods: {mods_path}")
+    mods(f"Scan mods at: {mods_path}")
     detected = detect_mods(mods_path)
     
     if detected.broken_files:
-        mods("Ignored invalid files:")
+        error("Invalid or corrupted mod files detected in directory:")
         for file_path, reason in detected.broken_files:
             extra(f"{file_path.name}: {reason}")
 
-    mods("Compare with manifest...")
+    mods("Comparing with manifest...")
     result = compare_mods(detected, desired_mods, mods_path)
     _print_report(result)
 

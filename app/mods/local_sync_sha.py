@@ -6,10 +6,11 @@ from pathlib import Path
 from urllib.request import urlopen
 
 from config import GITHUB_API_URL
-from logger import extra, info, missing, mods, outdated, uptodate
+from logger import extra, missing, mods, outdated
 from utils.http import download_file, get_json
 
 from .detect import detect_mods, parse_installed_mod_bytes
+from .models import InstalledMod
 
 
 @dataclass
@@ -19,6 +20,12 @@ class RemoteMod:
     sha1: str
     mod_id: str
     version: str
+
+
+@dataclass
+class RepoSyncAction:
+    remote: RemoteMod
+    remove_files: list[Path]
 
 
 def _sha1_bytes(raw_bytes: bytes) -> str:
@@ -42,7 +49,6 @@ def _download_bytes(url: str) -> bytes:
 
 
 def _fetch_remote_mods() -> list[RemoteMod]:
-    mods("Lecture des mods distants depuis la branche repo...")
     data = get_json(GITHUB_API_URL)
 
     if not isinstance(data, list):
@@ -57,12 +63,12 @@ def _fetch_remote_mods() -> list[RemoteMod]:
 
         name = entry.get("name")
         download_url = entry.get("download_url")
+
         if not isinstance(name, str) or not name.endswith(".jar"):
             continue
         if not isinstance(download_url, str) or not download_url.strip():
             continue
 
-        mods(f"Analyse du mod distant: {name}")
         raw_bytes = _download_bytes(download_url)
         remote_meta = parse_installed_mod_bytes(raw_bytes, name)
         remote = RemoteMod(
@@ -86,6 +92,63 @@ def _fetch_remote_mods() -> list[RemoteMod]:
     return remote_mods
 
 
+def _index_local_mods(mods: list[InstalledMod]) -> dict[str, list[InstalledMod]]:
+    index: dict[str, list[InstalledMod]] = {}
+
+    for mod in mods:
+        index.setdefault(mod.mod_id, []).append(mod)
+
+    return index
+
+
+def _build_sync_actions(
+    remote_mods: list[RemoteMod],
+    local_mods: list[InstalledMod],
+) -> tuple[list[RepoSyncAction], list[RepoSyncAction]]:
+    local_by_mod_id = _index_local_mods(local_mods)
+
+    missing_actions: list[RepoSyncAction] = []
+    outdated_actions: list[RepoSyncAction] = []
+
+    for remote in remote_mods:
+        local_matches = local_by_mod_id.get(remote.mod_id, [])
+        exact_match = next((mod for mod in local_matches if mod.version == remote.version), None)
+
+        if exact_match is None:
+            remove_files = [mod.file_path for mod in local_matches]
+            missing_actions.append(RepoSyncAction(remote=remote, remove_files=remove_files))
+            continue
+
+        try:
+            local_sha = _sha1_file(exact_match.file_path)
+        except Exception as exc:
+            raise RuntimeError(
+                f"Impossible de calculer le hash de {exact_match.file_path.name}: {exc}"
+            ) from exc
+
+        stale_duplicates = [
+            mod.file_path
+            for mod in local_matches
+            if mod.file_path != exact_match.file_path
+        ]
+
+        if local_sha != remote.sha1 or stale_duplicates:
+            remove_files = [exact_match.file_path, *stale_duplicates] if local_sha != remote.sha1 else stale_duplicates
+            outdated_actions.append(RepoSyncAction(remote=remote, remove_files=remove_files))
+
+    return missing_actions, outdated_actions
+
+
+def _apply_sync_actions(instance_path: Path, actions: list[RepoSyncAction]) -> None:
+    for action in actions:
+        for file_path in action.remove_files:
+            if file_path.exists():
+                file_path.unlink()
+
+        target_file = instance_path / action.remote.name
+        download_file(action.remote.download_url, target_file)
+
+
 def sync_remote_repo_mods(instance_mods_dir: str | Path):
     instance_path = Path(instance_mods_dir)
     instance_path.mkdir(parents=True, exist_ok=True)
@@ -94,54 +157,22 @@ def sync_remote_repo_mods(instance_mods_dir: str | Path):
     detected = detect_mods(instance_path)
 
     if detected.broken_files:
-        mods("Fichiers locaux ignores pendant la synchro repo:")
+        mods("Ignored local files during distant mod folder synchronisation:")
         for file_path, reason in detected.broken_files:
             extra(f"{file_path.name}: {reason}")
 
-    local_hashes: dict[str, tuple[Path, str]] = {}
-    local_by_mod_id: dict[str, list] = {}
+    mods("Comparaison du dossier avec le repo distant")
+    missing_actions, outdated_actions = _build_sync_actions(remote_mods, detected.mods)
 
-    for mod in detected.mods:
-        local_by_mod_id.setdefault(mod.mod_id, []).append(mod)
-        try:
-            local_hashes[mod.file_path.name] = (mod.file_path, _sha1_file(mod.file_path))
-        except Exception as exc:
-            extra(f"Hash local ignore pour {mod.file_path.name}: {exc}")
+    if missing_actions:
+        mods("Mods manquants")
+        for action in missing_actions:
+            missing(f"INSTALL {action.remote.mod_id} -> {action.remote.version}")
 
-    for remote in remote_mods:
-        target_file = instance_path / remote.name
-        local_same_name = local_hashes.get(remote.name)
-        same_mods = local_by_mod_id.get(remote.mod_id, [])
+    if outdated_actions:
+        mods("Outdated")
+        for action in outdated_actions:
+            outdated(f"UPDATE {action.remote.mod_id} -> {action.remote.version}")
 
-        remove_candidates = {
-            mod.file_path
-            for mod in same_mods
-            if mod.file_path.name != remote.name or mod.version != remote.version
-        }
-
-        for old_file in sorted(remove_candidates, key=lambda path: path.name):
-            if old_file.exists():
-                outdated(
-                    f"Repo cleanup {remote.mod_id}: suppression de {old_file.name}"
-                )
-                old_file.unlink()
-
-        if not local_same_name:
-            missing(f"Repo install {remote.mod_id} ({remote.version})")
-            info(f" - [MODS][REPO] Download: {remote.name}")
-            download_file(remote.download_url, target_file)
-            continue
-
-        local_file, local_sha = local_same_name
-        if local_sha != remote.sha1:
-            outdated(f"Repo update {remote.mod_id}: {local_file.name} -> {remote.name}")
-
-            if local_file.exists():
-                info(f" - [MODS][REPO] Remove: {local_file.name}")
-                local_file.unlink()
-
-            info(f" - [MODS][REPO] Download: {remote.name}")
-            download_file(remote.download_url, target_file)
-            continue
-
-        uptodate(f"Repo OK {remote.mod_id} ({remote.version})")
+    _apply_sync_actions(instance_path, missing_actions)
+    _apply_sync_actions(instance_path, outdated_actions)

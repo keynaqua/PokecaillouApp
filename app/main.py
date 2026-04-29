@@ -9,7 +9,6 @@ from config_sync import sync_config_branch
 from fabric import ensure_fabric_installed
 from shaders import ensure_shaders_installed
 from minecraft import create_minecraft_profile
-from utils.launcher import launch_minecraft_launcher
 from config import MANIFEST_MODS_URL, MANIFEST_TXTP_URL, SHADER_URL
 from utils.updater import (
     handle_cleanup_args,
@@ -96,8 +95,6 @@ def run():
 
     progress(100)
     step("🎉 Installation terminée !")
-
-    launch_minecraft_launcher()
 
 
 def main():
