@@ -4,19 +4,18 @@ from pathlib import Path
 # ----- Versions ----- #
 JAVA_MAJOR = 21
 
-VERSION = "2.1.0"
+VERSION = "3.0.0"
 
 GITHUB_OWNER = "keynaqua"
 APP_BASENAME = "KayouInstaller"
 GITHUB_REPO = "KayouInstaller"
 
 MODPACK_DATA_OWNER = "keynaqua"
-MODPACK_DATA_REPO = "Pokecaillou"
+MODPACK_DATA_REPO = "Minecraft_Modpacks_Data"
 MODPACK_MANIFEST_PATH = "manifests/mods.json"
 MODPACK_INFO_PATH = "manifests/modpack.json"
 MODPACK_RESOURCEPACKS_PATH = "manifests/resourcepacks.json"
 MODPACK_SHADERPACKS_PATH = "manifests/shaderpacks.json"
-MODPACK_MODS_PATH = "mods"
 
 # ----- Paths ----- #
 TEMP_DIR = Path("./tmp")
@@ -143,20 +142,6 @@ def modpack_key(name: str) -> str:
     return "_".join(name.strip().lower().split())
 
 
-def github_api(
-    path: str = "",
-    ref: str | None = None,
-    owner: str = MODPACK_DATA_OWNER,
-    repo: str = MODPACK_DATA_REPO,
-) -> str:
-    url = f"{GITHUB_API_URL}/{owner}/{repo}/contents"
-    if path:
-        url += f"/{path.strip('/')}"
-    if ref:
-        url += f"?ref={ref}"
-    return url
-
-
 def github_release_api(owner: str = GITHUB_OWNER, repo: str = GITHUB_REPO) -> str:
     return f"{GITHUB_API_URL}/{owner}/{repo}/releases/latest"
 
@@ -215,10 +200,6 @@ def get_modpack_resourcepacks_url(modpack_key: str) -> str:
 
 def get_modpack_shaderpacks_url(modpack_key: str) -> str:
     return github_raw(MODPACK_SHADERPACKS_PATH, modpack_key)
-
-
-def get_modpack_mods_api_url(modpack_key: str) -> str:
-    return github_api(MODPACK_MODS_PATH, modpack_key)
 
 
 def get_minecraft_dir() -> Path:

@@ -83,9 +83,14 @@ def run(info: ModpackInfo, safe_mode: bool):
     step("Preparation de l'installation Minecraft...")
     minecraft_dir = create_minecraft_profile(info.name, info.installation_dir, version_id)
 
-    progress(50)
+    progress(30)
     step("Synchronisation des mods...")
-    update_mods(Path(minecraft_dir) / MODS_DIR_NAME, info.key, safe_mode=safe_mode)
+    update_mods(
+        Path(minecraft_dir) / MODS_DIR_NAME,
+        info.key,
+        safe_mode=safe_mode,
+        progress_callback=progress,
+    )
 
     progress(70)
     step("Synchronisation des packs de ressource...")

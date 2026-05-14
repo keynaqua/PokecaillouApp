@@ -8,7 +8,6 @@ from pathlib import Path
 
 from config import (
     INSTALLATIONS_DIR_NAME,
-    MODPACK_MODS_PATH,
     MODS_DIR_NAME,
     RESOURCEPACKS_DIR_NAME,
     SHADERPACKS_DIR_NAME,
@@ -18,7 +17,6 @@ from config import (
     get_launcher_profiles_path,
     get_minecraft_dir,
     get_modpack_manifest_url,
-    get_modpack_mods_api_url,
     get_modpack_resourcepacks_url,
     get_modpack_shaderpacks_url,
 )
@@ -70,30 +68,7 @@ def _load_named_files(url: str, section: str, *fallback_sections: str) -> list[M
 
 
 def _load_mod_files(modpack_key: str) -> list[ManifestFile]:
-    files = _load_named_files(get_modpack_manifest_url(modpack_key), "mods")
-
-    try:
-        data = get_json(
-            get_modpack_mods_api_url(modpack_key),
-            timeout=SHORT_HTTP_TIMEOUT,
-            retries=SHORT_HTTP_RETRIES,
-        )
-    except DownloadError as exc:
-        if "404" in str(exc):
-            return files
-        raise
-
-    if not isinstance(data, list):
-        raise RuntimeError(f"Reponse GitHub invalide pour le dossier {MODPACK_MODS_PATH}/")
-
-    for entry in data:
-        if not isinstance(entry, dict) or entry.get("type") != "file":
-            continue
-        name = entry.get("name")
-        if isinstance(name, str) and name.strip():
-            files.append(ManifestFile(name.strip()))
-
-    return files
+    return _load_named_files(get_modpack_manifest_url(modpack_key), "mods")
 
 
 def _load_optional_named_files(url: str, section: str, *fallback_sections: str) -> list[ManifestFile]:
