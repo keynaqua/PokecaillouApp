@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import sys
-from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -10,10 +9,12 @@ from config import (
 )
 from logger import error, extra, info, missing, mods, outdated, success, uptodate
 from utils.http import download_file, get_json
+from utils.progress import ProgressCallback, RangedProgress
 
 from .detect import DetectionReport, InstalledMod, detect_mods, ensure_sha1
 
-ProgressCallback = Callable[[int], None]
+MOD_PROGRESS_START = 30
+MOD_PROGRESS_END = 70
 
 
 @dataclass
@@ -121,13 +122,13 @@ def _sync_manifest_mods(
     mods_dir: Path,
     desired_mods: list[ManifestMod],
     progress_callback: ProgressCallback | None = None,
-    progress_start: int = 30,
-    progress_step: int = 1,
-    progress_end: int = 70,
+    progress_start: int = MOD_PROGRESS_START,
+    progress_end: int = MOD_PROGRESS_END,
 ) -> None:
     installed = _index_by_mod_id(detect_mods(mods_dir).mods)
+    ranged_progress = RangedProgress(progress_callback, progress_start, progress_end, len(desired_mods))
 
-    for index, desired in enumerate(desired_mods, start=1):
+    for desired in desired_mods:
         matches = installed.get(desired.mod_id, [])
         up_to_date = next(
             (
@@ -144,8 +145,7 @@ def _sync_manifest_mods(
                 if duplicate.file_path != up_to_date.file_path and duplicate.file_path.exists():
                     info(f" - [MODS] Remove duplicate: {duplicate.file_path.name}")
                     duplicate.file_path.unlink()
-            if progress_callback:
-                progress_callback(min(progress_end, progress_start + index * progress_step))
+            ranged_progress.advance()
             continue
 
         for old_mod in matches:
@@ -157,8 +157,9 @@ def _sync_manifest_mods(
             missing(f"INSTALL {desired.mod_id} -> {desired.version}")
 
         download_file(desired.download_url, mods_dir / desired.file_name)
-        if progress_callback:
-            progress_callback(min(progress_end, progress_start + index * progress_step))
+        ranged_progress.advance()
+
+    ranged_progress.finish()
 
 
 def update_mods(

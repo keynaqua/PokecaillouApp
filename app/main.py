@@ -10,6 +10,7 @@ from config import (
     MODPACK_DATA_OWNER,
     MODPACK_DATA_REPO,
     MODS_DIR_NAME,
+    get_installation_dir,
     modpack_key,
 )
 from config_sync import sync_config_folder
@@ -81,6 +82,7 @@ def run(info: ModpackInfo, safe_mode: bool):
 
     progress(30)
     step("Preparation de l'installation Minecraft...")
+    is_fresh_install = not get_installation_dir(info.installation_dir).exists()
     minecraft_dir = create_minecraft_profile(info.name, info.installation_dir, version_id)
 
     progress(30)
@@ -94,21 +96,24 @@ def run(info: ModpackInfo, safe_mode: bool):
 
     progress(70)
     step("Synchronisation des packs de ressource...")
-    update_txt_packs(minecraft_dir, info.key)
+    update_txt_packs(minecraft_dir, info.key, progress_callback=progress)
 
     progress(80)
     step("Verification des shaders...")
-    ensure_shaders_installed(minecraft_dir, info.key)
+    ensure_shaders_installed(minecraft_dir, info.key, progress_callback=progress)
 
     progress(90)
     step("Synchronisation des configs necessaires... (BETA)")
-    sync_config_folder(
-        MODPACK_DATA_OWNER,
-        MODPACK_DATA_REPO,
-        info.key,
-        info.installation_dir,
-        CONFIG_DIR_NAME,
-    )
+    if is_fresh_install:
+        sync_config_folder(
+            MODPACK_DATA_OWNER,
+            MODPACK_DATA_REPO,
+            info.key,
+            info.installation_dir,
+            CONFIG_DIR_NAME,
+        )
+    else:
+        step("Installation deja presente, config de base conservee.")
 
     progress(100)
     step("Installation terminee !")

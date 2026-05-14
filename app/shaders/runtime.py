@@ -16,6 +16,10 @@ from config import (
 )
 from logger import shader, success
 from utils.http import DownloadError, download_file, get_json
+from utils.progress import ProgressCallback, RangedProgress
+
+SHADERPACK_PROGRESS_START = 80
+SHADERPACK_PROGRESS_END = 90
 
 
 @dataclass
@@ -96,15 +100,27 @@ def _ask_install_defaults() -> bool:
     return result == 6
 
 
-def ensure_shaders_installed(game_dir: str | Path, modpack_key: str) -> None:
+def ensure_shaders_installed(
+    game_dir: str | Path,
+    modpack_key: str,
+    progress_callback: ProgressCallback | None = None,
+) -> None:
     game_path = Path(game_dir)
     shaderpacks_dir = game_path / SHADERPACKS_DIR_NAME
 
     shader("Chargement du manifest shaderpacks...")
     packs = _load_manifest(modpack_key)
     if not packs:
+        RangedProgress(progress_callback, SHADERPACK_PROGRESS_START, SHADERPACK_PROGRESS_END, 0).finish()
         success("Configuration des shaderpacks terminee !")
         return
+
+    ranged_progress = RangedProgress(
+        progress_callback,
+        SHADERPACK_PROGRESS_START,
+        SHADERPACK_PROGRESS_END,
+        len(packs),
+    )
 
     local = _local_shaderpacks(shaderpacks_dir)
     wanted_names = {pack.file_name.lower() for pack in packs}
@@ -113,6 +129,7 @@ def ensure_shaders_installed(game_dir: str | Path, modpack_key: str) -> None:
 
     if missing_defaults and other_shaders and not _ask_install_defaults():
         shader("Shaders par defaut ignores.")
+        ranged_progress.finish()
         success("Configuration des shaderpacks terminee !")
         return
 
@@ -121,6 +138,7 @@ def ensure_shaders_installed(game_dir: str | Path, modpack_key: str) -> None:
 
         if target.exists() and _sha256(target) == pack.sha256:
             shader(f"OK {pack.file_name}")
+            ranged_progress.advance()
             continue
 
         if target.exists():
@@ -130,5 +148,8 @@ def ensure_shaders_installed(game_dir: str | Path, modpack_key: str) -> None:
             shader(f"Install {pack.file_name}")
 
         download_file(pack.download_url, target)
+        ranged_progress.advance()
+
+    ranged_progress.finish()
 
     success("Configuration des shaderpacks terminee !")

@@ -9,6 +9,10 @@ from pathlib import Path
 from config import HASH_CHUNK_SIZE, RESOURCEPACKS_DIR_NAME, get_modpack_resourcepacks_url
 from logger import success, txtp
 from utils.http import download_file, get_json
+from utils.progress import ProgressCallback, RangedProgress
+
+RESOURCEPACK_PROGRESS_START = 70
+RESOURCEPACK_PROGRESS_END = 80
 
 
 @dataclass
@@ -58,14 +62,22 @@ def _load_manifest(modpack_key: str) -> list[ResourcePack]:
     return packs
 
 
-def _sync_resourcepacks(resourcepacks_dir: Path, packs: list[ResourcePack]) -> None:
+def _sync_resourcepacks(
+    resourcepacks_dir: Path,
+    packs: list[ResourcePack],
+    progress_callback: ProgressCallback | None = None,
+    progress_start: int = RESOURCEPACK_PROGRESS_START,
+    progress_end: int = RESOURCEPACK_PROGRESS_END,
+) -> None:
     resourcepacks_dir.mkdir(parents=True, exist_ok=True)
+    ranged_progress = RangedProgress(progress_callback, progress_start, progress_end, len(packs))
 
     for pack in packs:
         target = resourcepacks_dir / pack.file_name
 
         if target.exists() and _sha256(target) == pack.sha256:
             txtp(f"OK {pack.file_name}")
+            ranged_progress.advance()
             continue
 
         if target.exists():
@@ -75,6 +87,9 @@ def _sync_resourcepacks(resourcepacks_dir: Path, packs: list[ResourcePack]) -> N
             txtp(f"Install {pack.file_name}")
 
         download_file(pack.download_url, target)
+        ranged_progress.advance()
+
+    ranged_progress.finish()
 
 
 def _quote_pack(file_name: str) -> str:
@@ -118,14 +133,18 @@ def _activate_resourcepacks(game_dir: Path, packs: list[ResourcePack]) -> None:
     options_path.write_text("\n".join(output) + "\n", encoding="utf-8")
 
 
-def update_txt_packs(game_dir: str | Path, modpack_key: str) -> None:
+def update_txt_packs(
+    game_dir: str | Path,
+    modpack_key: str,
+    progress_callback: ProgressCallback | None = None,
+) -> None:
     game_path = Path(game_dir)
 
     txtp("Chargement du manifest resourcepacks...")
     packs = _load_manifest(modpack_key)
 
     txtp("Synchronisation des resourcepacks...")
-    _sync_resourcepacks(game_path / RESOURCEPACKS_DIR_NAME, packs)
+    _sync_resourcepacks(game_path / RESOURCEPACKS_DIR_NAME, packs, progress_callback=progress_callback)
 
     txtp("Activation des resourcepacks...")
     _activate_resourcepacks(game_path, packs)

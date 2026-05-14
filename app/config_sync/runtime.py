@@ -91,7 +91,11 @@ def sync_config_folder(
 
             dst_file.parent.mkdir(parents=True, exist_ok=True)
 
-            info(f" - [CONFIG] Overwrite: {relative_path}")
+            if dst_file.exists():
+                info(f" - [CONFIG] Conserve existant: {relative_path}")
+                continue
+
+            info(f" - [CONFIG] Ajout: {relative_path}")
 
             shutil.copy2(src_file, dst_file)
 
