@@ -1,23 +1,33 @@
 import re
-import sys
-import time
 import subprocess
+import sys
 from pathlib import Path
 
+from config import (
+    APP_BASENAME,
+    UPDATE_HTTP_RETRIES,
+    UPDATE_HTTP_TIMEOUT,
+    UPDATE_SCRIPT_NAME,
+    VERSION,
+    github_release_api,
+    pending_update_name,
+    release_exe_name,
+)
+from gui import ask_update_confirmation, show_error_dialog, show_info_dialog
 from logger import info
-from config import VERSION, GITHUB_OWNER, GITHUB_REPO, APP_BASENAME
-from utils.http import get_json, download_file
-from gui import ask_update_confirmation, show_info_dialog, show_error_dialog
+from utils.http import download_file, get_json
 
 
 def parse_version(version: str) -> tuple[int, ...]:
     version = version.strip().lstrip("vV")
     parts = []
-    for p in version.split("."):
+
+    for part in version.split("."):
         try:
-            parts.append(int(p))
+            parts.append(int(part))
         except ValueError:
             parts.append(0)
+
     return tuple(parts)
 
 
@@ -28,6 +38,7 @@ def is_newer_version(local: str, remote: str) -> bool:
 def current_exe_path() -> Path:
     if getattr(sys, "frozen", False):
         return Path(sys.executable).resolve()
+
     return Path(sys.argv[0]).resolve()
 
 
@@ -35,25 +46,27 @@ def app_dir() -> Path:
     return current_exe_path().parent
 
 
-def build_versioned_exe_name(version: str) -> str:
-    return f"{APP_BASENAME}-{version}.exe"
+def pending_update_path() -> Path:
+    return app_dir() / pending_update_name()
+
+
+def updater_script_path() -> Path:
+    return app_dir() / UPDATE_SCRIPT_NAME
 
 
 def get_latest_release_info() -> dict:
-    url = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/releases/latest"
-    data = get_json(url)
+    data = get_json(github_release_api(), timeout=UPDATE_HTTP_TIMEOUT, retries=UPDATE_HTTP_RETRIES)
 
     if not isinstance(data, dict):
-        raise RuntimeError("Réponse GitHub invalide.")
+        raise RuntimeError("Reponse GitHub invalide.")
 
     tag_name = str(data.get("tag_name", "")).strip()
     if not tag_name:
         raise RuntimeError("tag_name absent de la release.")
 
-    remote_version = tag_name.lstrip("vV")
-    expected_name = build_versioned_exe_name(remote_version)
-
+    expected_name = release_exe_name()
     assets = data.get("assets", [])
+
     if not isinstance(assets, list):
         raise RuntimeError("Liste assets invalide.")
 
@@ -61,78 +74,88 @@ def get_latest_release_info() -> dict:
         if not isinstance(asset, dict):
             continue
         if asset.get("name") == expected_name:
+            download_url = asset.get("browser_download_url")
+            if not isinstance(download_url, str) or not download_url.strip():
+                raise RuntimeError(f"download_url manquant pour '{expected_name}'")
+
             return {
-                "version": remote_version,
+                "version": tag_name.lstrip("vV"),
                 "asset_name": expected_name,
-                "download_url": asset.get("browser_download_url", ""),
+                "download_url": download_url,
             }
 
-    available = [a.get("name", "?") for a in assets if isinstance(a, dict)]
+    available = [asset.get("name", "?") for asset in assets if isinstance(asset, dict)]
     raise RuntimeError(
         f"Asset '{expected_name}' introuvable. Assets disponibles: {available}"
     )
 
 
-def wait_until_file_released(path: Path, timeout: float = 20.0) -> bool:
-    deadline = time.time() + timeout
-
-    while time.time() < deadline:
-        if not path.exists():
-            return True
-
-        try:
-            tmp = path.with_suffix(path.suffix + ".tmpcheck")
-            path.rename(tmp)
-            tmp.rename(path)
-            return True
-        except OSError:
-            time.sleep(0.4)
-
-    return False
-
-
-def delete_file_when_possible(path: Path, timeout: float = 20.0) -> bool:
-    deadline = time.time() + timeout
-
-    while time.time() < deadline:
-        try:
-            if not path.exists():
-                return True
-            path.unlink()
-            return True
-        except OSError:
-            time.sleep(0.4)
-
-    return False
-
-
 def handle_cleanup_args() -> None:
-    if "--cleanup-old" not in sys.argv:
-        return
-
-    idx = sys.argv.index("--cleanup-old")
-    if idx + 1 >= len(sys.argv):
-        return
-
-    old_exe = Path(sys.argv[idx + 1])
-
-    wait_until_file_released(old_exe, timeout=20.0)
-    deleted = delete_file_when_possible(old_exe, timeout=20.0)
-
-    if deleted:
-        info(f"Programme mis à jour vers la version {VERSION}")
-    else:
-        info("Mise à jour effectuée, mais l'ancienne version n'a pas pu être supprimée immédiatement.")
+    # Compatibility with older versioned builds. The current updater replaces
+    # KayouInstaller.exe before relaunching, so there is no old exe to delete.
+    if "--cleanup-old" in sys.argv:
+        info(f"Programme mis a jour vers la version {VERSION}")
 
 
-def launch_updated_exe(new_exe: Path, old_exe: Path) -> None:
+def write_replacement_script(new_exe: Path, target_exe: Path, old_exe: Path) -> Path:
+    script = updater_script_path()
+    script.write_text(
+        "\n".join(
+            [
+                "@echo off",
+                "setlocal",
+                f'set "NEW={new_exe}"',
+                f'set "TARGET={target_exe}"',
+                f'set "OLD={old_exe}"',
+                "set /a TRIES=0",
+                "",
+                ":wait_old",
+                'if /I "%OLD%"=="%TARGET%" goto replace',
+                'if not exist "%OLD%" goto replace',
+                'move /Y "%OLD%" "%OLD%.tmpcheck" >nul 2>nul',
+                "if not errorlevel 1 goto restore_old",
+                "set /a TRIES+=1",
+                "if %TRIES% GEQ 60 goto failed",
+                "timeout /t 1 /nobreak >nul",
+                "goto wait_old",
+                "",
+                ":restore_old",
+                'move /Y "%OLD%.tmpcheck" "%OLD%" >nul 2>nul',
+                "set /a TRIES=0",
+                "goto replace",
+                "",
+                ":replace",
+                'move /Y "%NEW%" "%TARGET%" >nul 2>nul',
+                "if not errorlevel 1 goto launch",
+                "set /a TRIES+=1",
+                "if %TRIES% GEQ 60 goto failed",
+                "timeout /t 1 /nobreak >nul",
+                "goto replace",
+                "",
+                ":launch",
+                'if /I not "%OLD%"=="%TARGET%" del "%OLD%" >nul 2>nul',
+                'start "" "%TARGET%"',
+                'del "%~f0" >nul 2>nul',
+                "exit /b 0",
+                "",
+                ":failed",
+                "exit /b 1",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    return script
+
+
+def launch_replacement_script(script: Path) -> None:
     creationflags = 0
     if sys.platform == "win32":
         creationflags = subprocess.CREATE_NO_WINDOW
 
     subprocess.Popen(
-        [str(new_exe), "--cleanup-old", str(old_exe)],
-        cwd=str(new_exe.parent),
+        ["cmd.exe", "/c", str(script)],
+        cwd=str(script.parent),
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         creationflags=creationflags,
@@ -141,14 +164,15 @@ def launch_updated_exe(new_exe: Path, old_exe: Path) -> None:
 
 def check_for_updates() -> bool:
     """
-    Retourne True si une mise à jour a été lancée
-    et que l'app actuelle doit se fermer.
+    Returns True when an update has been started and this process should exit.
     """
+    if not getattr(sys, "frozen", False):
+        return False
+
     try:
         release = get_latest_release_info()
-    except Exception as e:
-        # en cas d'erreur update, on n'empêche pas l'install de continuer
-        info(f"Impossible de vérifier les mises à jour : {e}")
+    except Exception as exc:
+        info(f"Impossible de verifier les mises a jour : {exc}")
         return False
 
     remote_version = release["version"]
@@ -157,51 +181,66 @@ def check_for_updates() -> bool:
         return False
 
     accepted = ask_update_confirmation(
-        title="Mise à jour disponible",
+        title="Mise a jour disponible",
         message=(
             f"Une nouvelle version est disponible.\n\n"
             f"Version actuelle : {VERSION}\n"
             f"Nouvelle version : {remote_version}\n\n"
-            f"Clique sur OK pour télécharger et lancer la mise à jour."
+            "Clique sur OK pour telecharger et installer la mise a jour."
         ),
     )
 
     if not accepted:
         return False
 
-    destination = app_dir() / release["asset_name"]
+    pending_exe = pending_update_path()
+    old_exe = current_exe_path()
+    target_exe = app_dir() / release_exe_name()
 
     try:
-        if not destination.exists():
-            info(f"Téléchargement de la version {remote_version}...")
-            download_file(release["download_url"], destination)
+        if pending_exe.exists():
+            pending_exe.unlink()
 
-        old_exe = current_exe_path()
-        launch_updated_exe(destination, old_exe)
+        info(f"Telechargement de la version {remote_version}...")
+        download_file(release["download_url"], pending_exe)
+
         show_info_dialog(
-            "Mise à jour",
-            "La nouvelle version va être lancée."
+            "Mise a jour",
+            "La mise a jour est prete. L'application va redemarrer.",
         )
+
+        script = write_replacement_script(pending_exe, target_exe, old_exe)
+        launch_replacement_script(script)
         return True
 
-    except Exception as e:
-        show_error_dialog("Erreur de mise à jour", str(e))
+    except Exception as exc:
+        try:
+            if pending_exe.exists():
+                pending_exe.unlink()
+        except OSError:
+            pass
+
+        show_error_dialog("Erreur de mise a jour", str(exc))
         return False
 
 
 def cleanup_other_versions() -> None:
     current = current_exe_path()
-    pattern = re.compile(
+    legacy_versioned_exe = re.compile(
         rf"^{re.escape(APP_BASENAME)}-\d+\.\d+\.\d+\.exe$",
         re.IGNORECASE,
     )
 
     for path in app_dir().iterdir():
-        if not path.is_file():
+        if not path.is_file() or path == current:
             continue
-        if path == current:
-            continue
-        if pattern.match(path.name):
+
+        should_delete = (
+            legacy_versioned_exe.match(path.name)
+            or path.name == pending_update_path().name
+        )
+
+        if should_delete:
             try:
                 path.unlink()
             except OSError:

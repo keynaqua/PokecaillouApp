@@ -1,153 +1,176 @@
+import json
 import subprocess
 import tempfile
 from pathlib import Path
 
 from config import (
-    MC_VERSION,
-    FABRIC_META_URL,
     FABRIC_INSTALLER_META_URL,
+    FABRIC_LOADER_PREFIX,
+    FABRIC_META_URL,
+    JAVA_COMMAND,
+    LATEST_VERSION,
+    get_fabric_installer_name,
+    get_fabric_installer_url,
     get_minecraft_dir,
 )
 from logger import fabric, success
-from utils.http import get_json, download_file
-from fabric.detect import (
-    find_installed_fabric_loader,
-    get_installed_fabric_version_id,
-)
+from utils.http import download_file, get_json
 
 
 def _parse_version_tuple(version: str) -> tuple[int, ...]:
     parts = []
-
     for part in version.split("."):
         try:
             parts.append(int(part))
         except ValueError:
             parts.append(0)
-
     return tuple(parts)
+
+
+def _extract_loader_version(version_id: str, mc_version: str) -> str | None:
+    suffix = f"-{mc_version}"
+    if version_id.startswith(FABRIC_LOADER_PREFIX) and version_id.endswith(suffix):
+        return version_id[len(FABRIC_LOADER_PREFIX):-len(suffix)]
+    return None
+
+
+def find_installed_fabric_loader(mc_dir: Path, mc_version: str) -> str | None:
+    versions_dir = mc_dir / "versions"
+    if not versions_dir.exists():
+        return None
+
+    found_versions = []
+    for version_json in versions_dir.glob("*/*.json"):
+        try:
+            content = json.loads(version_json.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+
+        version_id = str(content.get("id", ""))
+        inherits_from = str(content.get("inheritsFrom", ""))
+        loader_version = _extract_loader_version(version_id, mc_version)
+        if loader_version and (inherits_from == mc_version or version_id.endswith(f"-{mc_version}")):
+            found_versions.append(loader_version)
+
+    return max(found_versions, key=_parse_version_tuple) if found_versions else None
+
+
+def get_installed_fabric_version_id(mc_dir: Path, mc_version: str) -> str:
+    versions_dir = mc_dir / "versions"
+    if not versions_dir.exists():
+        raise FileNotFoundError("Le dossier versions de Minecraft est introuvable.")
+
+    candidates = [
+        (loader_version, entry.name)
+        for entry in versions_dir.iterdir()
+        if entry.is_dir()
+        for loader_version in [_extract_loader_version(entry.name, mc_version)]
+        if loader_version
+    ]
+    if not candidates:
+        raise RuntimeError(
+            f"Aucune version Fabric installee trouvee pour Minecraft {mc_version}."
+        )
+
+    candidates.sort(key=lambda item: _parse_version_tuple(item[0]))
+    return candidates[-1][1]
 
 
 def get_latest_loader_version(mc_version: str) -> str:
     data = get_json(f"{FABRIC_META_URL}/{mc_version}")
-
     if not data:
-        raise RuntimeError(f"Aucune version Fabric trouvée pour Minecraft {mc_version}")
-
+        raise RuntimeError(f"Aucune version Fabric trouvee pour Minecraft {mc_version}")
     return data[0]["loader"]["version"]
 
 
 def get_latest_installer_version() -> str:
     data = get_json(FABRIC_INSTALLER_META_URL)
-
     if not data:
-        raise RuntimeError("Impossible de récupérer la version de l'installateur Fabric")
-
+        raise RuntimeError("Impossible de recuperer la version de l'installateur Fabric")
     return data[0]["version"]
 
 
 def run_fabric_installer(jar_path: Path, mc_dir: Path, mc_version: str, loader_version: str) -> None:
-    cmd = [
-        "java",
-        "-jar",
-        str(jar_path),
-        "client",
-        "-dir",
-        str(mc_dir),
-        "-mcversion",
-        mc_version,
-        "-loader",
-        loader_version,
-        "-noprofile",
-    ]
-
-    fabric("Lancement de l'installateur Fabric...")
-    result = subprocess.run(cmd, check=False)
-
+    result = subprocess.run(
+        [
+            JAVA_COMMAND,
+            "-jar",
+            str(jar_path),
+            "client",
+            "-dir",
+            str(mc_dir),
+            "-mcversion",
+            mc_version,
+            "-loader",
+            loader_version,
+            "-noprofile",
+        ],
+        check=False,
+    )
     if result.returncode != 0:
-        raise RuntimeError(
-            f"Échec de l'installation Fabric (code retour {result.returncode})"
-        )
+        raise RuntimeError(f"Echec de l'installation Fabric (code retour {result.returncode})")
 
 
 def _list_installed_fabric_versions(mc_dir: Path, mc_version: str) -> list[str]:
     versions_dir = mc_dir / "versions"
-
     if not versions_dir.exists():
         return []
 
-    found = []
-
-    for entry in versions_dir.iterdir():
-        if not entry.is_dir():
-            continue
-
-        name = entry.name
-        prefix = "fabric-loader-"
-        suffix = f"-{mc_version}"
-
-        if name.startswith(prefix) and name.endswith(suffix):
-            found.append(name)
-
-    found.sort()
-    return found
+    suffix = f"-{mc_version}"
+    return sorted(
+        entry.name
+        for entry in versions_dir.iterdir()
+        if entry.is_dir()
+        and entry.name.startswith(FABRIC_LOADER_PREFIX)
+        and entry.name.endswith(suffix)
+    )
 
 
-def ensure_fabric_installed() -> None:
+def resolve_loader_version(mc_version: str, requested_version: str) -> str:
+    if requested_version.lower() == LATEST_VERSION:
+        return get_latest_loader_version(mc_version)
+    return requested_version
+
+
+def ensure_fabric_installed(mc_version: str, requested_version: str = LATEST_VERSION) -> str:
     mc_dir = get_minecraft_dir()
 
     fabric(f"Dossier Minecraft : {mc_dir}")
-    fabric(f"Version Minecraft cible : {MC_VERSION}")
+    fabric(f"Version Minecraft cible : {mc_version}")
 
-    latest_loader = get_latest_loader_version(MC_VERSION)
-    installed_loader = find_installed_fabric_loader(mc_dir, MC_VERSION)
+    expected_loader = resolve_loader_version(mc_version, requested_version)
+    installed_loader = find_installed_fabric_loader(mc_dir, mc_version)
 
-    fabric(f"Loader Fabric attendu : {latest_loader}")
-    fabric(f"Loader Fabric installé : {installed_loader or 'aucun'}")
+    fabric(f"Loader Fabric attendu : {expected_loader}")
+    fabric(f"Loader Fabric installe : {installed_loader or 'aucun'}")
 
-    if installed_loader == latest_loader:
-        success("Fabric est déjà installé dans la bonne version.")
-        return
+    if installed_loader == expected_loader:
+        success("Fabric est deja installe dans la bonne version.")
+        return get_installed_fabric_version_id(mc_dir, mc_version)
 
-    fabric("Fabric absent ou pas à jour. Installation en cours...")
-
+    fabric("Fabric absent ou pas a jour. Installation en cours...")
     installer_version = get_latest_installer_version()
 
     with tempfile.TemporaryDirectory() as tmp_dir:
-        jar_name = f"fabric-installer-{installer_version}.jar"
-        jar_path = Path(tmp_dir) / jar_name
-        jar_url = (
-            f"https://maven.fabricmc.net/net/fabricmc/"
-            f"fabric-installer/{installer_version}/{jar_name}"
-        )
+        jar_path = Path(tmp_dir) / get_fabric_installer_name(installer_version)
+        download_file(get_fabric_installer_url(installer_version), jar_path)
+        fabric(f"Lancement de l'installateur Fabric {installer_version}...")
+        run_fabric_installer(jar_path, mc_dir, mc_version, expected_loader)
 
-        fabric(f"Téléchargement de l'installateur Fabric {installer_version}...")
-        download_file(jar_url, jar_path)
-
-        run_fabric_installer(
-            jar_path=jar_path,
-            mc_dir=mc_dir,
-            mc_version=MC_VERSION,
-            loader_version=latest_loader,
-        )
-
-    installed_loader = find_installed_fabric_loader(mc_dir, MC_VERSION)
-    fabric_versions = _list_installed_fabric_versions(mc_dir, MC_VERSION)
-
+    installed_loader = find_installed_fabric_loader(mc_dir, mc_version)
+    fabric_versions = _list_installed_fabric_versions(mc_dir, mc_version)
     if fabric_versions:
-        fabric("Versions Fabric détectées après installation :")
+        fabric("Versions Fabric detectees apres installation :")
         for version_id in fabric_versions:
             fabric(f" - {version_id}")
 
-    fabric(f"Loader Fabric détecté après installation : {installed_loader or 'aucun'}")
-
-    if installed_loader != latest_loader:
+    if installed_loader != expected_loader:
         raise RuntimeError(
-            "Fabric ne semble pas s'être installé correctement "
-            f"(attendu: {latest_loader}, détecté: {installed_loader or 'aucun'})"
+            "Fabric ne semble pas s'etre installe correctement "
+            f"(attendu: {expected_loader}, detecte: {installed_loader or 'aucun'})"
         )
 
-    installed_version_id = get_installed_fabric_version_id(mc_dir, MC_VERSION)
-    fabric(f"Version Fabric retenue : {installed_version_id}")
-
-    success("Fabric installé / mis à jour avec succès.")
+    version_id = get_installed_fabric_version_id(mc_dir, mc_version)
+    fabric(f"Version Fabric retenue : {version_id}")
+    success("Fabric installe / mis a jour avec succes.")
+    return version_id

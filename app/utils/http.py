@@ -5,6 +5,17 @@ from pathlib import Path
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
 
+from config import (
+    HTTP_CHUNK_SIZE,
+    HTTP_DOWNLOAD_RETRIES,
+    HTTP_DOWNLOAD_RETRY_DELAY,
+    HTTP_DOWNLOAD_TIMEOUT,
+    HTTP_JSON_RETRIES,
+    HTTP_JSON_RETRY_DELAY,
+    HTTP_JSON_TIMEOUT,
+    PARTIAL_DOWNLOAD_SUFFIX,
+)
+
 DEFAULT_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -30,9 +41,9 @@ def _make_request(url: str, headers: dict | None = None) -> Request:
 
 def get_json(
     url: str,
-    timeout: int = 20,
-    retries: int = 3,
-    retry_delay: float = 1.5,
+    timeout: int = HTTP_JSON_TIMEOUT,
+    retries: int = HTTP_JSON_RETRIES,
+    retry_delay: float = HTTP_JSON_RETRY_DELAY,
 ) -> dict | list:
     last_error = None
 
@@ -56,18 +67,42 @@ def get_json(
     raise DownloadError(f"Échec récupération JSON: {url} ({last_error})")
 
 
+def get_text(
+    url: str,
+    timeout: int = HTTP_JSON_TIMEOUT,
+    retries: int = HTTP_JSON_RETRIES,
+    retry_delay: float = HTTP_JSON_RETRY_DELAY,
+) -> str:
+    last_error = None
+
+    for attempt in range(1, retries + 1):
+        try:
+            with urlopen(_make_request(url), timeout=timeout) as response:
+                raw = response.read()
+                encoding = response.headers.get_content_charset() or "utf-8"
+                return raw.decode(encoding)
+        except (HTTPError, URLError, TimeoutError, OSError, UnicodeDecodeError) as e:
+            last_error = e
+            if attempt < retries:
+                time.sleep(retry_delay * attempt)
+            else:
+                raise DownloadError(f"Echec recuperation texte: {url} ({e})") from e
+
+    raise DownloadError(f"Echec recuperation texte: {url} ({last_error})")
+
+
 def download_file(
     url: str,
     dest: Path,
-    timeout: int = 60,
-    retries: int = 4,
-    retry_delay: float = 2.0,
-    chunk_size: int = 1024 * 64,
+    timeout: int = HTTP_DOWNLOAD_TIMEOUT,
+    retries: int = HTTP_DOWNLOAD_RETRIES,
+    retry_delay: float = HTTP_DOWNLOAD_RETRY_DELAY,
+    chunk_size: int = HTTP_CHUNK_SIZE,
 ) -> Path:
     dest = Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
 
-    tmp_dest = dest.with_suffix(dest.suffix + ".part")
+    tmp_dest = dest.with_suffix(dest.suffix + PARTIAL_DOWNLOAD_SUFFIX)
     last_error = None
 
     for attempt in range(1, retries + 1):

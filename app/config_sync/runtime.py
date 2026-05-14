@@ -1,98 +1,100 @@
 from __future__ import annotations
 
+import shutil
+import tempfile
 from pathlib import Path
+from zipfile import ZipFile
 
-from config import get_minecraft_dir
+from config import (
+    CONFIG_DIR_NAME,
+    REMOTE_CONFIG_DIR_NAME,
+    get_install_subdir,
+)
 from logger import info, success
-from utils.http import get_json, download_file
+from utils.http import download_file
 
 
 class ConfigSyncError(RuntimeError):
     pass
 
 
-def _github_root_url(owner: str, repo: str, branch: str) -> str:
-    return f"https://api.github.com/repos/{owner}/{repo}/contents?ref={branch}"
+def _github_zip_url(owner: str, repo: str, branch: str) -> str:
+    return f"https://github.com/{owner}/{repo}/archive/refs/heads/{branch}.zip"
 
 
-def _walk_repo(owner: str, repo: str, path: str | None, branch: str) -> list[dict]:
-    """
-    Liste récursivement tous les fichiers d'une branche GitHub.
-    """
-    if path:
-        url = f"https://api.github.com/repos/{owner}/{repo}/contents/{path}?ref={branch}"
-    else:
-        url = _github_root_url(owner, repo, branch)
-
-    data = get_json(url)
-
-    if isinstance(data, dict):
-        if data.get("type") == "file":
-            return [data]
-        raise ConfigSyncError(f"Réponse GitHub invalide pour '{path or '/'}'")
-
-    if not isinstance(data, list):
-        raise ConfigSyncError(f"Réponse GitHub invalide pour '{path or '/'}'")
-
-    files: list[dict] = []
-
-    for entry in data:
-        if not isinstance(entry, dict):
-            continue
-
-        entry_type = entry.get("type")
-        entry_path = entry.get("path")
-
-        if entry_type == "file":
-            files.append(entry)
-
-        elif entry_type == "dir":
-            if not isinstance(entry_path, str) or not entry_path.strip():
-                continue
-            files.extend(_walk_repo(owner, repo, entry_path, branch))
-
-    return files
-
-
-def sync_config_branch(
+def sync_config_folder(
     owner: str,
     repo: str,
-    branch: str = "config",
-    installation_name: str = "pokecaillou",
+    branch: str,
+    installation_name: str,
+    target_subdir: str = CONFIG_DIR_NAME,
 ) -> Path:
-    game_dir = get_minecraft_dir() / ".installations" / installation_name
-    target_root = game_dir / "config"
+    source_dir = REMOTE_CONFIG_DIR_NAME.strip("/")
+
+    target_root = get_install_subdir(
+        installation_name,
+        target_subdir,
+    )
+
     target_root.mkdir(parents=True, exist_ok=True)
 
-    info(f" - [CONFIG] Source GitHub: {owner}/{repo}@{branch}")
+    info(f" - [CONFIG] Source GitHub: {owner}/{repo}@{branch}/{source_dir}")
     info(f" - [CONFIG] Dossier cible: {target_root}")
 
-    try:
-        files = _walk_repo(owner, repo, None, branch)
-    except Exception as e:
-        info(f" - [CONFIG] Impossible de récupérer la branche ({e}), étape ignorée.")
-        return target_root
+    zip_url = _github_zip_url(owner, repo, branch)
 
-    # ✅ NOUVEAU COMPORTEMENT
-    if not files:
-        info(" - [CONFIG] Aucun fichier trouvé dans la branche, étape ignorée.")
-        return target_root
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp_path = Path(tmp_dir)
 
-    for entry in files:
-        file_path = entry.get("path")
-        download_url = entry.get("download_url")
+        zip_path = tmp_path / "repo.zip"
 
-        if not isinstance(file_path, str) or not file_path.strip():
-            continue
+        try:
+            info(" - [CONFIG] Telechargement de l'archive GitHub...")
+            download_file(zip_url, zip_path)
 
-        if not isinstance(download_url, str) or not download_url.strip():
-            raise ConfigSyncError(f"download_url manquant pour '{file_path}'")
+            extract_dir = tmp_path / "extract"
+            extract_dir.mkdir(parents=True, exist_ok=True)
 
-        relative_path = Path(file_path)
-        destination = target_root / relative_path
+            info(" - [CONFIG] Extraction de l'archive...")
+            with ZipFile(zip_path, "r") as zip_ref:
+                zip_ref.extractall(extract_dir)
 
-        info(f" - [CONFIG] Download: {relative_path}")
-        download_file(download_url, destination)
+        except Exception as exc:
+            raise ConfigSyncError(
+                f"Impossible de telecharger/extract l'archive GitHub: {exc}"
+            ) from exc
 
-    success("Config synchronisée avec succès.")
+        extracted_dirs = [p for p in extract_dir.iterdir() if p.is_dir()]
+
+        if not extracted_dirs:
+          raise ConfigSyncError(
+             "Aucun dossier trouve dans l'archive GitHub"
+         )
+
+        repo_root = extracted_dirs[0]
+
+        source_root = repo_root / source_dir
+
+        if not source_root.exists():
+            info(" - [CONFIG] Aucun dossier config trouve dans le repo.")
+            return target_root
+
+        files = [p for p in source_root.rglob("*") if p.is_file()]
+
+        if not files:
+            info(" - [CONFIG] Aucun fichier trouve dans le dossier config.")
+            return target_root
+
+        for src_file in files:
+            relative_path = src_file.relative_to(source_root)
+            dst_file = target_root / relative_path
+
+            dst_file.parent.mkdir(parents=True, exist_ok=True)
+
+            info(f" - [CONFIG] Overwrite: {relative_path}")
+
+            shutil.copy2(src_file, dst_file)
+
+    success("Config synchronisee avec succes.")
+
     return target_root

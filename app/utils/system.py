@@ -1,5 +1,8 @@
 import ctypes
 
+from config import BYTES_PER_GIB, JAVA_RAM_MAX_GB, JAVA_RAM_MIN_GB, JAVA_RAM_RATIO
+
+
 def get_total_ram_gb():
     class MEMORYSTATUSEX(ctypes.Structure):
         _fields_ = [
@@ -20,18 +23,18 @@ def get_total_ram_gb():
     ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(memory_status))
 
     # 🔥 IMPORTANT : division FLOAT + round
-    return round(memory_status.ullTotalPhys / (1024 ** 3))
+    return round(memory_status.ullTotalPhys / BYTES_PER_GIB)
 
 
 def get_recommended_ram_gb():
     total = get_total_ram_gb()
 
-    ram = int(total * 0.6)  # 60%
+    ram = int(total * JAVA_RAM_RATIO)
 
-    if ram < 4:
-        return 4
-    if ram > 16:
-        return 16
+    if ram < JAVA_RAM_MIN_GB:
+        return JAVA_RAM_MIN_GB
+    if ram > JAVA_RAM_MAX_GB:
+        return JAVA_RAM_MAX_GB
 
     return ram
 

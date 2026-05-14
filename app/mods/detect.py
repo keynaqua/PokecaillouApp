@@ -1,23 +1,56 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import zipfile
-from io import BytesIO
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .models import DetectionReport, InstalledMod
+from config import JAR_GLOB, MOD_HASH_CHUNK_SIZE
 
 
-class ModDetectError(RuntimeError):
-    pass
+@dataclass
+class InstalledMod:
+    mod_id: str
+    version: str
+    file_path: Path
+    sha1: str | None = None
+    git_blob_sha: str | None = None
 
 
-class FabricMetaError(ModDetectError):
-    pass
+@dataclass
+class DetectionReport:
+    mods: list[InstalledMod] = field(default_factory=list)
+    broken_files: list[tuple[Path, str]] = field(default_factory=list)
 
 
-def _escape_newlines_inside_strings(text: str) -> str:
+def sha1_file(path: Path) -> str:
+    h = hashlib.sha1()
+    with path.open("rb") as file:
+        while chunk := file.read(MOD_HASH_CHUNK_SIZE):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def git_blob_sha(path: Path) -> str:
+    raw = path.read_bytes()
+    return hashlib.sha1(f"blob {len(raw)}\0".encode() + raw).hexdigest()
+
+
+def ensure_sha1(mod: InstalledMod) -> str:
+    if mod.sha1 is None:
+        mod.sha1 = sha1_file(mod.file_path)
+    return mod.sha1
+
+
+def ensure_git_blob_sha(mod: InstalledMod) -> str:
+    if mod.git_blob_sha is None:
+        mod.git_blob_sha = git_blob_sha(mod.file_path)
+    return mod.git_blob_sha
+
+
+def _escape_control_chars(text: str) -> str:
     result: list[str] = []
     in_string = False
     escaped = False
@@ -27,118 +60,70 @@ def _escape_newlines_inside_strings(text: str) -> str:
             result.append(char)
             escaped = False
             continue
-
         if char == "\\":
             result.append(char)
             escaped = True
             continue
-
         if char == '"':
             result.append(char)
             in_string = not in_string
             continue
-
-        if in_string and char in ("\n", "\r"):
-            result.append("\\n")
+        if in_string and char in ("\n", "\r", "\t"):
+            result.append({"\n": "\\n", "\r": "\\r", "\t": "\\t"}[char])
             continue
-
         result.append(char)
 
     return "".join(result)
 
 
-def _load_json_tolerant(raw_text: str, jar_name: str) -> dict[str, Any] | list[Any]:
-    try:
-        return json.loads(raw_text)
-    except json.JSONDecodeError:
-        repaired = _escape_newlines_inside_strings(raw_text)
+def _load_json_tolerant(text: str) -> dict[str, Any] | list[Any]:
+    text = text.replace("\ufeff", "")
+    for candidate in (text, _escape_control_chars(text)):
         try:
-            return json.loads(repaired)
-        except json.JSONDecodeError as exc:
-            raise FabricMetaError(f"{jar_name}: invalid fabric.mod.json") from exc
+            return json.loads(candidate, strict=False)
+        except json.JSONDecodeError:
+            pass
+    return json.loads(_escape_control_chars(text))
 
 
-def _normalize_fabric_meta(data: dict[str, Any] | list[Any], source_name: str) -> dict[str, Any]:
+def _read_fabric_meta(path: Path) -> dict[str, Any]:
+    with zipfile.ZipFile(path) as jar:
+        with jar.open("fabric.mod.json") as file:
+            data = _load_json_tolerant(file.read().decode("utf-8-sig", errors="replace"))
+
     if isinstance(data, list):
-        data = next((item for item in data if isinstance(item, dict) and item.get("id")), None)
-        if data is None:
-            raise FabricMetaError(f"{source_name}: unusable fabric.mod.json list")
-
+        data = next((item for item in data if isinstance(item, dict) and item.get("id")), {})
     if not isinstance(data, dict):
-        raise FabricMetaError(f"{source_name}: fabric.mod.json must be an object")
-
+        raise RuntimeError("fabric.mod.json inexploitable")
     return data
-
-
-def _read_fabric_meta(jar_path: Path) -> dict[str, Any]:
-    try:
-        with zipfile.ZipFile(jar_path) as jar:
-            with jar.open("fabric.mod.json") as file:
-                raw_text = file.read().decode("utf-8")
-    except KeyError as exc:
-        raise FabricMetaError(f"{jar_path.name}: missing fabric.mod.json") from exc
-    except zipfile.BadZipFile as exc:
-        raise FabricMetaError(f"{jar_path.name}: invalid JAR") from exc
-    except UnicodeDecodeError as exc:
-        raise FabricMetaError(f"{jar_path.name}: unreadable fabric.mod.json") from exc
-
-    data = _load_json_tolerant(raw_text, jar_path.name)
-    return _normalize_fabric_meta(data, jar_path.name)
-
-
-def parse_installed_mod_from_meta(meta: dict[str, Any], file_path: Path) -> InstalledMod:
-    mod_id = meta.get("id")
-    version = meta.get("version")
-    name = meta.get("name")
-
-    if not isinstance(mod_id, str) or not mod_id.strip():
-        raise FabricMetaError(f"{file_path.name}: missing id")
-    if not isinstance(version, str) or not version.strip():
-        raise FabricMetaError(f"{file_path.name}: missing version")
-
-    return InstalledMod(
-        mod_id=mod_id.strip(),
-        version=version.strip(),
-        name=name.strip() if isinstance(name, str) and name.strip() else None,
-        file_path=file_path,
-    )
-
-
-def parse_installed_mod_bytes(jar_bytes: bytes, file_name: str) -> InstalledMod:
-    file_path = Path(file_name)
-
-    try:
-        with zipfile.ZipFile(BytesIO(jar_bytes)) as jar:
-            with jar.open("fabric.mod.json") as file:
-                raw_text = file.read().decode("utf-8")
-    except KeyError as exc:
-        raise FabricMetaError(f"{file_name}: missing fabric.mod.json") from exc
-    except zipfile.BadZipFile as exc:
-        raise FabricMetaError(f"{file_name}: invalid JAR") from exc
-    except UnicodeDecodeError as exc:
-        raise FabricMetaError(f"{file_name}: unreadable fabric.mod.json") from exc
-
-    data = _load_json_tolerant(raw_text, file_name)
-    meta = _normalize_fabric_meta(data, file_name)
-    return parse_installed_mod_from_meta(meta, file_path)
 
 
 def detect_mods(mods_dir: str | Path) -> DetectionReport:
     mods_path = Path(mods_dir)
-    if not mods_path.exists():
-        raise FileNotFoundError(f"Mods directory not found: {mods_path}")
-    if not mods_path.is_dir():
-        raise NotADirectoryError(f"Invalid mods directory: {mods_path}")
-
     report = DetectionReport()
 
-    for jar_path in sorted(mods_path.glob("*.jar")):
+    if not mods_path.exists():
+        return report
+    if not mods_path.is_dir():
+        raise NotADirectoryError(f"Dossier mods invalide: {mods_path}")
+
+    for jar_path in sorted(mods_path.glob(JAR_GLOB)):
         try:
             meta = _read_fabric_meta(jar_path)
-            report.mods.append(parse_installed_mod_from_meta(meta, jar_path))
-        except FabricMetaError as exc:
-            report.broken_files.append((jar_path, str(exc)))
+            mod_id = meta.get("id")
+            version = meta.get("version")
+            if not isinstance(mod_id, str) or not mod_id.strip():
+                raise RuntimeError("id manquant")
+            if not isinstance(version, str) or not version.strip():
+                raise RuntimeError("version manquante")
+            report.mods.append(
+                InstalledMod(
+                    mod_id=mod_id.strip(),
+                    version=version.strip(),
+                    file_path=jar_path,
+                )
+            )
         except Exception as exc:
-            report.broken_files.append((jar_path, f"{jar_path.name}: unexpected error: {exc}"))
+            report.broken_files.append((jar_path, str(exc)))
 
     return report

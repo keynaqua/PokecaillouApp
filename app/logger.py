@@ -41,6 +41,11 @@ def fabric(message: str) -> None:
     _send(f"[⛩️] {message}", "yellow")
 
 
+# ----- NeoForge ----- #
+def neoforge(message: str) -> None:
+    _send(f"[NEOFORGE] {message}", "yellow")
+
+
 # ----- Mods ----- #
 def mods(message: str) -> None:
     _send(f"[🧬] {message}", "yellow")
